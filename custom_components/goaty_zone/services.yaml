@@ -26,3 +26,154 @@ reload_zones:
   name: "Zonen neu laden"
   description: "Vergleicht aktuelle Zonen mit gespeicherten, aktualisiert bei Änderung."
   fields: {}
+
+get_zone_config:
+  name: "Zonenkonfiguration abrufen"
+  description: "Liest die persistente Konfiguration einer Zone oder aller Zonen aus."
+  fields:
+    zone_id:
+      name: "Zone ID"
+      description: "Optional: eine einzelne Zone abfragen."
+      required: false
+      example: "133"
+      selector:
+        text:
+
+set_zone_config:
+  name: "Zonenkonfiguration setzen"
+  description: "Schreibt Persistenzdaten für eine Zone in den HA-Storage."
+  fields:
+    zone_id:
+      name: "Zone ID"
+      description: "ID der Zielzone."
+      required: true
+      example: "133"
+      selector:
+        text:
+    name:
+      name: "Name"
+      description: "Anzeigename der Zone."
+      required: false
+      example: "Weidenwiese"
+      selector:
+        text:
+    enabled:
+      name: "Aktiv"
+      description: "Zone für die Automatik aktivieren oder deaktivieren."
+      required: false
+      selector:
+        boolean:
+    frequency_days:
+      name: "Tage"
+      description: "Mindestabstand zwischen zwei Mähvorgängen."
+      required: false
+      example: "2"
+      selector:
+        number:
+          min: 1
+          max: 365
+          mode: box
+    angles:
+      name: "Winkel"
+      description: "Liste der erlaubten Mähwinkel in Grad."
+      required: false
+      example: "[0,45,90]"
+      selector:
+        object:
+    angle_index:
+      name: "Winkelindex"
+      description: "Aktueller Index in der Winkel-Liste."
+      required: false
+      example: "0"
+      selector:
+        number:
+          min: 0
+          max: 99
+          mode: box
+    last_mowed:
+      name: "Letzter Mähzeitpunkt"
+      description: "ISO-Zeitstempel des letzten Mähens."
+      required: false
+      example: "2026-06-11T14:30:00+00:00"
+      selector:
+        text:
+    locked:
+      name: "Gesperrt"
+      description: "Manuelle Sperre der Zone."
+      required: false
+      selector:
+        boolean:
+    locked_until:
+      name: "Gesperrt bis"
+      description: "ISO-Zeitstempel bis zur automatischen Entsperrung."
+      required: false
+      example: "2026-06-12T06:00:00+00:00"
+      selector:
+        text:
+
+lock_zone:
+  name: "Zone sperren"
+  description: "Setzt die Sperre einer Zone."
+  fields:
+    zone_id:
+      name: "Zone ID"
+      description: "ID der Zielzone."
+      required: true
+      example: "133"
+      selector:
+        text:
+    locked_until:
+      name: "Gesperrt bis"
+      description: "Optionaler Entsperrzeitpunkt."
+      required: false
+      example: "2026-06-12T06:00:00+00:00"
+      selector:
+        text:
+
+unlock_zone:
+  name: "Zone entsperren"
+  description: "Hebt die Sperre einer Zone auf."
+  fields:
+    zone_id:
+      name: "Zone ID"
+      description: "ID der Zielzone."
+      required: true
+      example: "133"
+      selector:
+        text:
+
+reset_zone_timer:
+  name: "Zonentimer zurücksetzen"
+  description: "Setzt den letzten Mähzeitpunkt einer Zone zurück."
+  fields:
+    zone_id:
+      name: "Zone ID"
+      description: "ID der Zielzone."
+      required: true
+      example: "133"
+      selector:
+        text:
+
+mark_zone_mowed:
+  name: "Zone als gemäht markieren"
+  description: "Setzt den letzten Mähzeitpunkt und rückt den Winkel weiter."
+  fields:
+    zone_id:
+      name: "Zone ID"
+      description: "ID der Zielzone."
+      required: true
+      example: "133"
+      selector:
+        text:
+    last_mowed:
+      name: "Zeitpunkt"
+      description: "Optionaler ISO-Zeitstempel, sonst jetzt."
+      required: false
+      example: "2026-06-11T14:30:00+00:00"
+      selector:
+        text:
+
+get_due_zones:
+  name: "Fällige Zonen abrufen"
+  description: "Gibt alle derzeit fälligen Zonen zurück."
+  fields: {}

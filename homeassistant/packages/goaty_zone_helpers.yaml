@@ -13,23 +13,3 @@ input_select:
     name: "Goaty Mähzone"
     options:
       - "Keine Zonen"
-
-template:
-  - sensor:
-      - name: "Goaty Zones"
-        unique_id: goaty_zones_alias
-        state: >-
-          {{ states('goaty_zone.goaty_zones') }}
-        availability: >-
-          {{ has_value('goaty_zone.goaty_zones') }}
-        attributes:
-          zones: >-
-            {{ state_attr('goaty_zone.goaty_zones', 'zones') | tojson }}
-          hash: >-
-            {{ state_attr('goaty_zone.goaty_zones', 'hash') }}
-          count: >-
-            {{ state_attr('goaty_zone.goaty_zones', 'count') }}
-          zone_names: >-
-            {{ state_attr('goaty_zone.goaty_zones', 'zone_names') | tojson }}
-          zone_ids: >-
-            {{ state_attr('goaty_zone.goaty_zones', 'zone_ids') | tojson }}
