@@ -20,7 +20,9 @@ DEFAULT_DEVICE_NAME = "Goaty"
 CARD_RESOURCE_PATH = "/local/goaty-zones-card.js"
 CARD_SOURCE = "custom_components/goaty_zone/www/goaty-zones-card.js"
 ZONES_TEXT_ENTITY = "input_text.goaty_zones_json"
+ZONES_HASH_ENTITY = "input_text.goaty_zones_hash"
 ZONES_SELECT_ENTITY = "input_select.goaty_mow_zone"
+EMPTY_SELECT_OPTION = "Keine Zonen"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +86,9 @@ def _normalize_subset_list(subsets: Any) -> list[dict[str, str]]:
             zone_id = item.get("mssid") or item.get("id") or item.get("zone_id")
             zone_name = item.get("name") or item.get("zone_name")
         elif isinstance(item, list) and len(item) >= 2:
+            if isinstance(item[0], (list, dict)) or isinstance(item[1], (list, dict)):
+                zones.update({zone["id"]: zone for zone in _normalize_subset_list(item)})
+                continue
             zone_id, zone_name = item[0], item[1]
 
         if zone_id is None or zone_name is None:
@@ -101,19 +106,26 @@ def _normalize_subset_list(subsets: Any) -> list[dict[str, str]]:
 
 def _extract_zones_from_response(raw: Any) -> list[dict[str, str]]:
     if isinstance(raw, dict):
+        for key in ("subsets", "decoded_subsets"):
+            zones = _normalize_subset_list(raw.get(key))
+            if zones:
+                return zones
+
         subsets = raw.get("subsets")
         zones = _normalize_subset_list(subsets)
         if zones:
             return zones
 
-        for key in ("resp", "body", "data"):
-            nested = raw.get(key)
-            if nested is not None:
-                zones = _extract_zones_from_response(nested)
-                if zones:
-                    return zones
+        for nested in raw.values():
+            zones = _extract_zones_from_response(nested)
+            if zones:
+                return zones
 
     elif isinstance(raw, list):
+        zones = _normalize_subset_list(raw)
+        if zones:
+            return zones
+
         for item in raw:
             zones = _extract_zones_from_response(item)
             if zones:
@@ -155,6 +167,36 @@ async def _fetch_zones_from_device(hass: HomeAssistant, device: Any) -> list[dic
     raise RuntimeError(f"Could not read GOAT zones; attempts={attempts!r}")
 
 
+def _load_cached_zones_from_dump() -> list[dict[str, str]]:
+    dump_path = Path("/config/goaty_zone_areas_last.json")
+    if not dump_path.exists():
+        return []
+
+    try:
+        payload = json.loads(dump_path.read_text())
+    except Exception:
+        _LOGGER.exception("Failed to read cached GOAT zones dump")
+        return []
+
+    zones = _extract_zones_from_response(payload)
+    if zones:
+        return zones
+
+    attempts = payload.get("attempts") if isinstance(payload, dict) else None
+    if isinstance(attempts, list):
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            zones = _extract_zones_from_response(attempt.get("decoded_subsets"))
+            if zones:
+                return zones
+            zones = _extract_zones_from_response(attempt.get("raw_response"))
+            if zones:
+                return zones
+
+    return []
+
+
 async def _write_input_text_value(
     hass: HomeAssistant,
     entity_id: str,
@@ -178,6 +220,23 @@ async def _write_input_text_value(
     hass.states.async_set(entity_id, value, {"source": DOMAIN})
 
 
+async def _notify_zone_update(hass: HomeAssistant, *, changed: bool, zones: list[dict[str, str]], new_hash: str) -> None:
+    lines = [f"{len(zones)} Zonen {'geladen (geändert)' if changed else 'geladen (keine Änderung)'}."]
+    if zones:
+        lines.extend(f"- {zone['id']} | {zone['name']}" for zone in zones)
+    lines.append(f"Hash: {new_hash}")
+    await hass.services.async_call(
+        "persistent_notification",
+        "create",
+        {
+            "title": f"Goaty - Zonen {'aktualisiert' if changed else 'unverändert'}",
+            "message": "\n".join(lines),
+            "notification_id": "goaty_zones_update",
+        },
+        blocking=True,
+    )
+
+
 async def _write_input_select_options(
     hass: HomeAssistant,
     entity_id: str,
@@ -187,30 +246,30 @@ async def _write_input_select_options(
 ) -> None:
     current_state = hass.states.get(entity_id)
     current_value = current_state.state if current_state is not None else None
-    desired_value = current_value if current_value in options else (options[0] if options else "")
+    effective_options = options if options else [EMPTY_SELECT_OPTION]
+    desired_value = current_value if current_value in effective_options else effective_options[0]
 
     if current_state is not None:
         try:
             await hass.services.async_call(
                 "input_select",
                 "set_options",
-                {"entity_id": entity_id, "options": options},
+                {"entity_id": entity_id, "options": effective_options},
                 blocking=True,
                 context=context,
             )
-            if desired_value:
-                await hass.services.async_call(
-                    "input_select",
-                    "select_option",
-                    {"entity_id": entity_id, "option": desired_value},
-                    blocking=True,
-                    context=context,
-                )
+            await hass.services.async_call(
+                "input_select",
+                "select_option",
+                {"entity_id": entity_id, "option": desired_value},
+                blocking=True,
+                context=context,
+            )
             return
         except Exception:
             _LOGGER.exception("Failed to update %s via input_select service; falling back to state machine", entity_id)
 
-    hass.states.async_set(entity_id, desired_value, {"options": options, "source": DOMAIN})
+    hass.states.async_set(entity_id, desired_value, {"options": effective_options, "source": DOMAIN})
 
 
 async def _store_zones(
@@ -223,18 +282,29 @@ async def _store_zones(
     normalized_zones = sorted(zones, key=lambda zone: _zone_sort_key(zone["id"]))
     new_json = json.dumps(normalized_zones, ensure_ascii=False, separators=(",", ":"))
     new_hash = hashlib.md5(new_json.encode("utf-8")).hexdigest()[:8]
-    stored_state = hass.states.get(ZONES_TEXT_ENTITY)
-    stored_json = stored_state.state if stored_state is not None else ""
-    changed = force_update or stored_json != new_json
+    stored_state = hass.states.get(ZONES_HASH_ENTITY)
+    stored_hash = stored_state.state if stored_state is not None else ""
+    changed = force_update or stored_hash != new_hash
 
     if changed:
         await _write_input_text_value(hass, ZONES_TEXT_ENTITY, new_json, context=context)
+        await _write_input_text_value(hass, ZONES_HASH_ENTITY, new_hash, context=context)
         await _write_input_select_options(
             hass,
             ZONES_SELECT_ENTITY,
-            [zone["name"] for zone in normalized_zones],
+            sorted([zone["name"] for zone in normalized_zones], key=str.casefold),
             context=context,
         )
+    else:
+        await _write_input_text_value(hass, ZONES_HASH_ENTITY, new_hash, context=context)
+        await _write_input_select_options(
+            hass,
+            ZONES_SELECT_ENTITY,
+            sorted([zone["name"] for zone in normalized_zones], key=str.casefold),
+            context=context,
+        )
+
+    await _notify_zone_update(hass, changed=changed, zones=normalized_zones, new_hash=new_hash)
 
     return changed, new_hash
 
@@ -246,7 +316,15 @@ async def _handle_get_zones_impl(
     force_update: bool,
 ) -> None:
     device = _find_device(hass, call.data.get("device_name", DEFAULT_DEVICE_NAME))
-    zones = await _fetch_zones_from_device(hass, device)
+    source = "device"
+    try:
+        zones = await _fetch_zones_from_device(hass, device)
+    except Exception as exc:
+        _LOGGER.warning("GOAT zone fetch failed from device, trying cached dump: %s", exc)
+        zones = _load_cached_zones_from_dump()
+        source = "cache"
+        if not zones:
+            raise
     changed, new_hash = await _store_zones(
         hass,
         zones,
@@ -254,8 +332,9 @@ async def _handle_get_zones_impl(
         context=call.context,
     )
     _LOGGER.info(
-        "GOAT zones %s (%s, hash=%s, count=%d)",
+        "GOAT zones %s from %s (%s, hash=%s, count=%d)",
         "updated" if changed else "unchanged",
+        source,
         "forced" if force_update else "compared",
         new_hash,
         len(zones),

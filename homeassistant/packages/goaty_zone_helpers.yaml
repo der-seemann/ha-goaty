@@ -1,0 +1,15 @@
+input_text:
+  goaty_zones_json:
+    name: "Goaty Zonen JSON"
+    max: 255
+    initial: "[]"
+  goaty_zones_hash:
+    name: "Goaty Zonen Hash"
+    max: 64
+    initial: ""
+
+input_select:
+  goaty_mow_zone:
+    name: "Goaty Mähzone"
+    options:
+      - "Keine Zonen"
