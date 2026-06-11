@@ -11,8 +11,11 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity_component import EntityComponent
 
 DOMAIN = "goaty_zone"
 ECOVACS_DOMAIN = "ecovacs"
@@ -25,6 +28,42 @@ ZONES_SELECT_ENTITY = "input_select.goaty_mow_zone"
 EMPTY_SELECT_OPTION = "Keine Zonen"
 
 _LOGGER = logging.getLogger(__name__)
+GOATY_SENSOR: "GoatyZonesSensor | None" = None
+
+
+class GoatyZonesSensor(SensorEntity):
+    """Store the current GOAT zones as sensor attributes."""
+
+    _attr_name = "Goaty Zones"
+    _attr_icon = "mdi:map-legend"
+    _attr_unique_id = "goaty_zones_sensor"
+    _attr_has_entity_name = False
+    _attr_should_poll = False
+    _attr_entity_id = "sensor.goaty_zones"
+
+    def __init__(self) -> None:
+        self._zones: list[dict[str, str]] = []
+        self._hash = ""
+
+    @property
+    def native_value(self) -> str:
+        return f"{len(self._zones)} Zonen" if self._zones else "Keine Zonen"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "zones": self._zones,
+            "hash": self._hash,
+            "count": len(self._zones),
+            "zone_names": [zone["name"] for zone in self._zones],
+            "zone_ids": [zone["id"] for zone in self._zones],
+        }
+
+    def update_zones(self, zones: list[dict[str, str]], hash_val: str) -> None:
+        self._zones = list(zones)
+        self._hash = hash_val
+        if self.hass is not None:
+            self.async_write_ha_state()
 
 
 def _matches_device(device: Any, wanted: str) -> bool:
@@ -111,11 +150,6 @@ def _extract_zones_from_response(raw: Any) -> list[dict[str, str]]:
             if zones:
                 return zones
 
-        subsets = raw.get("subsets")
-        zones = _normalize_subset_list(subsets)
-        if zones:
-            return zones
-
         for nested in raw.values():
             zones = _extract_zones_from_response(nested)
             if zones:
@@ -195,6 +229,11 @@ def _load_cached_zones_from_dump() -> list[dict[str, str]]:
                 return zones
 
     return []
+
+
+def _zones_hash(zones: list[dict[str, str]]) -> str:
+    new_json = json.dumps(sorted(zones, key=lambda zone: _zone_sort_key(zone["id"])), ensure_ascii=False, separators=(",", ":"))
+    return hashlib.md5(new_json.encode("utf-8")).hexdigest()[:8]
 
 
 async def _write_input_text_value(
@@ -280,32 +319,30 @@ async def _store_zones(
     context: Any | None = None,
 ) -> tuple[bool, str]:
     normalized_zones = sorted(zones, key=lambda zone: _zone_sort_key(zone["id"]))
-    new_json = json.dumps(normalized_zones, ensure_ascii=False, separators=(",", ":"))
-    new_hash = hashlib.md5(new_json.encode("utf-8")).hexdigest()[:8]
+    new_hash = _zones_hash(normalized_zones)
     stored_state = hass.states.get(ZONES_HASH_ENTITY)
     stored_hash = stored_state.state if stored_state is not None else ""
     changed = force_update or stored_hash != new_hash
 
-    if changed:
-        await _write_input_text_value(hass, ZONES_TEXT_ENTITY, new_json, context=context)
-        await _write_input_text_value(hass, ZONES_HASH_ENTITY, new_hash, context=context)
-        await _write_input_select_options(
-            hass,
-            ZONES_SELECT_ENTITY,
-            sorted([zone["name"] for zone in normalized_zones], key=str.casefold),
-            context=context,
-        )
-    else:
-        await _write_input_text_value(hass, ZONES_HASH_ENTITY, new_hash, context=context)
-        await _write_input_select_options(
-            hass,
-            ZONES_SELECT_ENTITY,
-            sorted([zone["name"] for zone in normalized_zones], key=str.casefold),
-            context=context,
-        )
+    # Keep the old helper as a compact debug trail; the sensor is the real source of truth now.
+    await _write_input_text_value(
+        hass,
+        ZONES_TEXT_ENTITY,
+        f"{len(normalized_zones)} Zonen | hash={new_hash}",
+        context=context,
+    )
+    await _write_input_text_value(hass, ZONES_HASH_ENTITY, new_hash, context=context)
+    await _write_input_select_options(
+        hass,
+        ZONES_SELECT_ENTITY,
+        sorted([zone["name"] for zone in normalized_zones], key=str.casefold),
+        context=context,
+    )
+
+    if GOATY_SENSOR is not None:
+        GOATY_SENSOR.update_zones(normalized_zones, new_hash)
 
     await _notify_zone_update(hass, changed=changed, zones=normalized_zones, new_hash=new_hash)
-
     return changed, new_hash
 
 
@@ -361,13 +398,66 @@ async def _handle_mow_zone_impl(hass: HomeAssistant, call: ServiceCall) -> None:
     )
     await device.execute_command(CleanAreaV2(CleanMode.SPOT_AREA, [int(zone_id)], 1))
 
+    if hass.states.get("input_text.goaty_current_zone_id") is not None:
+        await hass.services.async_call(
+            "input_text",
+            "set_value",
+            {"entity_id": "input_text.goaty_current_zone_id", "value": zone_id},
+            blocking=True,
+            context=call.context,
+        )
+    if zone_name and hass.states.get("input_text.goaty_current_zone_name") is not None:
+        await hass.services.async_call(
+            "input_text",
+            "set_value",
+            {"entity_id": "input_text.goaty_current_zone_name", "value": zone_name},
+            blocking=True,
+            context=call.context,
+        )
+    if hass.states.get("input_boolean.goaty_zone_active") is not None:
+        await hass.services.async_call(
+            "input_boolean",
+            "turn_on",
+            {"entity_id": "input_boolean.goaty_zone_active"},
+            blocking=True,
+            context=call.context,
+        )
+
+
+async def _restore_sensor_from_cache() -> None:
+    if GOATY_SENSOR is None:
+        return
+
+    cached = await GOATY_SENSOR.hass.async_add_executor_job(_load_cached_zones_from_dump)
+    if cached:
+        GOATY_SENSOR.update_zones(cached, _zones_hash(cached))
+
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
-    """Register Goaty zone services."""
+    """Register Goaty zone services and sensor."""
+
+    global GOATY_SENSOR
+
+    component = EntityComponent(_LOGGER, DOMAIN, hass)
+    GOATY_SENSOR = GoatyZonesSensor()
+    await component.async_add_entities([GOATY_SENSOR])
 
     www_path = hass.config.path(CARD_SOURCE)
     if os.path.exists(www_path):
-        hass.http.register_static_path(CARD_RESOURCE_PATH, www_path, cache_headers=False)
+        try:
+            await hass.http.async_register_static_paths(
+                [StaticPathConfig(CARD_RESOURCE_PATH, www_path, cache_headers=False)]
+            )
+        except Exception:
+            _LOGGER.exception("Failed to register Goaty card static path")
+        try:
+            from homeassistant.components.frontend import async_register_extra_module_url
+
+            async_register_extra_module_url(hass, CARD_RESOURCE_PATH)
+        except Exception:
+            _LOGGER.debug("Frontend extra module registration not available", exc_info=True)
+
+    await _restore_sensor_from_cache()
 
     async def handle_get_zones(call: ServiceCall) -> None:
         await _handle_get_zones_impl(hass, call, force_update=True)
