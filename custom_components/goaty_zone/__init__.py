@@ -61,6 +61,7 @@ class GoatyZonesSensor(SensorEntity):
             "zones": enriched_zones,
             "hash": self._hash,
             "count": len(enriched_zones),
+            "due_count": sum(1 for zone in enriched_zones if zone.get("is_due")),
             "zone_names": [zone["name"] for zone in enriched_zones],
             "zone_ids": [zone["id"] for zone in enriched_zones],
         }
@@ -132,6 +133,7 @@ def _apply_sensor_state(hass: HomeAssistant, zones: list[dict[str, str]], hash_v
             "zones": enriched_zones,
             "hash": hash_val,
             "count": len(enriched_zones),
+            "due_count": sum(1 for zone in enriched_zones if zone.get("is_due")),
             "zone_names": [zone["name"] for zone in enriched_zones],
             "zone_ids": [zone["id"] for zone in enriched_zones],
             "source": DOMAIN,
@@ -239,10 +241,17 @@ class GoatyZoneStore:
     async def async_unlock(self, zone_id: str) -> dict[str, Any]:
         return await self.async_update(zone_id, locked=False, locked_until=None)
 
-    async def async_mark_mowed(self, zone_id: str, *, last_mowed: str | None = None) -> dict[str, Any]:
+    async def async_mark_mowed(
+        self,
+        zone_id: str,
+        *,
+        last_mowed: str | None = None,
+        advance_angle: bool = True,
+    ) -> dict[str, Any]:
         current = self._data.setdefault(str(zone_id), self._default_config(str(zone_id), str(zone_id)))
         current["last_mowed"] = last_mowed or datetime.now(timezone.utc).isoformat()
-        await self.async_advance_angle(zone_id)
+        if advance_angle:
+            await self.async_advance_angle(zone_id)
         await self.async_save()
         return dict(current)
 
@@ -634,25 +643,49 @@ async def _handle_get_zones_impl(
     )
 
 
-async def _handle_mow_zone_impl(hass: HomeAssistant, call: ServiceCall) -> None:
+def _build_clean_area_command(zone_id: str, *, angle: int | None = None) -> Any:
     from deebot_client.commands.json.clean import CleanAreaV2
     from deebot_client.models import CleanMode
 
+    # The clean command signature differs across deebot_client releases.
+    # Try the most specific form first, then fall back to the older one.
+    if angle is not None:
+        for args in (
+            (CleanMode.SPOT_AREA, [int(zone_id)], 1, angle),
+            (CleanMode.SPOT_AREA, [int(zone_id)], 1),
+        ):
+            try:
+                return CleanAreaV2(*args)
+            except TypeError:
+                continue
+    return CleanAreaV2(CleanMode.SPOT_AREA, [int(zone_id)], 1)
+
+
+async def _send_mow_command(hass: HomeAssistant, zone_id: str, *, angle: int | None = None, device_name: str = DEFAULT_DEVICE_NAME) -> None:
+    device = _find_device(hass, device_name)
+    command = _build_clean_area_command(zone_id, angle=angle)
+    await device.execute_command(command)
+
+
+async def _handle_mow_zone_impl(hass: HomeAssistant, call: ServiceCall) -> None:
     zone_id = str(call.data["zone_id"]).strip()
     if not zone_id or not zone_id.isdecimal():
         raise ValueError("zone_id must be a decimal Ecovacs zone ID, e.g. 133")
 
     zone_name = str(call.data.get("zone_name", "")).strip()
-    device = _find_device(hass, call.data.get("device_name", DEFAULT_DEVICE_NAME))
+    device_name = call.data.get("device_name", DEFAULT_DEVICE_NAME)
+    angle = ZONE_STORE.next_angle(zone_id) if ZONE_STORE is not None else 0
+    device = _find_device(hass, device_name)
     info = getattr(device, "device_info", {}) or {}
     _LOGGER.warning(
-        "Starting GOAT zone_id=%s zone_name=%s on Ecovacs device nick=%s class=%s",
+        "Starting GOAT zone_id=%s zone_name=%s angle=%s on Ecovacs device nick=%s class=%s",
         zone_id,
         zone_name or "-",
+        angle,
         info.get("nick"),
         info.get("class"),
     )
-    await device.execute_command(CleanAreaV2(CleanMode.SPOT_AREA, [int(zone_id)], 1))
+    await _send_mow_command(hass, zone_id, angle=angle, device_name=device_name)
 
     if hass.states.get("input_text.goaty_current_zone_id") is not None:
         await hass.services.async_call(
@@ -809,7 +842,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         if ZONE_STORE is None:
             return {}
         zone_id = str(call.data["zone_id"]).strip()
-        locked_until = call.data.get("locked_until")
+        locked_until = call.data.get("until") or call.data.get("locked_until")
         result = await ZONE_STORE.async_lock(zone_id, locked_until=locked_until)
         await _refresh_sensor_from_known_zones(hass)
         _LOGGER.info("GOAT zone locked for zone_id=%s -> %s", zone_id, result)
@@ -838,7 +871,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             return {}
         zone_id = str(call.data["zone_id"]).strip()
         last_mowed = call.data.get("last_mowed")
-        result = await ZONE_STORE.async_mark_mowed(zone_id, last_mowed=last_mowed)
+        advance_angle = bool(call.data.get("advance_angle", True))
+        result = await ZONE_STORE.async_mark_mowed(zone_id, last_mowed=last_mowed, advance_angle=advance_angle)
         await _refresh_sensor_from_known_zones(hass)
         _LOGGER.info("GOAT zone marked mowed for zone_id=%s -> %s", zone_id, result)
         return result
@@ -885,7 +919,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 vol.Required("zone_id"): cv.string,
                 vol.Optional("name"): cv.string,
                 vol.Optional("enabled"): cv.boolean,
-                vol.Optional("frequency_days"): vol.All(int, vol.Range(min=1)),
+                vol.Optional("frequency_days"): vol.All(int, vol.Range(min=1, max=30)),
                 vol.Optional("angles"): [vol.All(int, vol.Range(min=0, max=180))],
                 vol.Optional("angle_index"): vol.All(int, vol.Range(min=0)),
                 vol.Optional("last_mowed"): cv.string,
@@ -902,6 +936,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         schema=vol.Schema(
             {
                 vol.Required("zone_id"): cv.string,
+                vol.Optional("until"): cv.string,
                 vol.Optional("locked_until"): cv.string,
             }
         ),
@@ -929,6 +964,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             {
                 vol.Required("zone_id"): cv.string,
                 vol.Optional("last_mowed"): cv.string,
+                vol.Optional("advance_angle", default=True): cv.boolean,
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,

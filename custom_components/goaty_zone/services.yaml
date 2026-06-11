@@ -40,8 +40,8 @@ get_zone_config:
         text:
 
 set_zone_config:
-  name: "Zonenkonfiguration setzen"
-  description: "Schreibt Persistenzdaten für eine Zone in den HA-Storage."
+  name: "Zone konfigurieren"
+  description: "Setzt Mähfrequenz, Winkel und Status einer Zone."
   fields:
     zone_id:
       name: "Zone ID"
@@ -64,32 +64,21 @@ set_zone_config:
       selector:
         boolean:
     frequency_days:
-      name: "Tage"
-      description: "Mindestabstand zwischen zwei Mähvorgängen."
+      name: "Häufigkeit (Tage)"
+      description: "Alle X Tage mähen"
       required: false
-      example: "2"
       selector:
         number:
           min: 1
-          max: 365
-          mode: box
+          max: 30
+          mode: slider
     angles:
-      name: "Winkel"
-      description: "Liste der erlaubten Mähwinkel in Grad."
+      name: "Mähwinkel"
+      description: "Liste von Winkeln in Grad (0-180), wird rotierend genutzt"
       required: false
-      example: "[0,45,90]"
+      example: "[0, 45, 90, 135]"
       selector:
         object:
-    angle_index:
-      name: "Winkelindex"
-      description: "Aktueller Index in der Winkel-Liste."
-      required: false
-      example: "0"
-      selector:
-        number:
-          min: 0
-          max: 99
-          mode: box
     last_mowed:
       name: "Letzter Mähzeitpunkt"
       description: "ISO-Zeitstempel des letzten Mähens."
@@ -122,13 +111,12 @@ lock_zone:
       example: "133"
       selector:
         text:
-    locked_until:
+    until:
       name: "Gesperrt bis"
-      description: "Optionaler Entsperrzeitpunkt."
+      description: "ISO-Datetime, z.B. 2026-06-01T00:00:00. Leer = dauerhaft."
       required: false
-      example: "2026-06-12T06:00:00+00:00"
       selector:
-        text:
+        datetime:
 
 unlock_zone:
   name: "Zone entsperren"
@@ -143,8 +131,8 @@ unlock_zone:
         text:
 
 reset_zone_timer:
-  name: "Zonentimer zurücksetzen"
-  description: "Setzt den letzten Mähzeitpunkt einer Zone zurück."
+  name: "Mäh-Timer zurücksetzen"
+  description: "Erzwingt Mähvorgang bei nächster Prüfung."
   fields:
     zone_id:
       name: "Zone ID"
@@ -156,7 +144,7 @@ reset_zone_timer:
 
 mark_zone_mowed:
   name: "Zone als gemäht markieren"
-  description: "Setzt den letzten Mähzeitpunkt und rückt den Winkel weiter."
+  description: "Setzt den letzten Mähzeitpunkt."
   fields:
     zone_id:
       name: "Zone ID"
@@ -165,15 +153,13 @@ mark_zone_mowed:
       example: "133"
       selector:
         text:
-    last_mowed:
-      name: "Zeitpunkt"
-      description: "Optionaler ISO-Zeitstempel, sonst jetzt."
+    advance_angle:
+      name: "Winkel weiterschalten"
       required: false
-      example: "2026-06-11T14:30:00+00:00"
       selector:
-        text:
+        boolean:
 
 get_due_zones:
-  name: "Fällige Zonen abrufen"
-  description: "Gibt alle derzeit fälligen Zonen zurück."
+  name: "Fällige Zonen abfragen"
+  description: "Gibt alle Zonen zurück die gemäht werden sollen."
   fields: {}

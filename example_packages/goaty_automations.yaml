@@ -1,0 +1,45 @@
+# goaty_automations.yaml - Template, Zone-IDs anpassen!
+automation:
+  # Morgens prüfen welche Zonen fällig sind und erste starten
+  - alias: "Goaty - Automatisches Maehlen"
+    trigger:
+      - platform: time
+        at: "08:00:00"
+    condition:
+      - condition: sun
+        after: sunrise
+        after_offset: "00:30:00"
+      - condition: state
+        entity_id: lawn_mower.goaty
+        state: docked
+      - condition: state
+        entity_id: input_boolean.goaty_zone_active
+        state: "off"
+    action:
+      - service: goaty_zone.get_due_zones
+        response_variable: due
+      - condition: template
+        value_template: "{{ due.count > 0 }}"
+      - service: goaty_zone.mow_zone
+        data:
+          zone_id: "{{ due.due_zones[0].id }}"
+          zone_name: "{{ due.due_zones[0].name }}"
+
+  # Zone als gemäht markieren wenn Goaty zur Station faehrt
+  - alias: "Goaty - Zone abschliessen"
+    trigger:
+      - platform: state
+        entity_id: lawn_mower.goaty
+        to: docked
+    condition:
+      - condition: state
+        entity_id: input_boolean.goaty_zone_active
+        state: "on"
+    action:
+      - service: goaty_zone.mark_zone_mowed
+        data:
+          zone_id: "{{ states('input_text.goaty_current_zone_id') }}"
+          advance_angle: true
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.goaty_zone_active
