@@ -1,7 +1,9 @@
-# goaty_automations.yaml - Template, Zone-IDs anpassen!
+# goaty_automations.yaml - Template, Zone-IDs anpassen.
+# Keine per-Zone-Scripts mehr: die Automationen rufen nur noch goaty_zone.* Services auf.
 automation:
   # Morgens prüfen welche Zonen fällig sind und erste starten
   - alias: "Goaty - Automatisches Maehlen"
+    mode: single
     trigger:
       - platform: time
         at: "08:00:00"
@@ -27,6 +29,7 @@ automation:
 
   # Zone als gemäht markieren wenn Goaty zur Station faehrt
   - alias: "Goaty - Zone abschliessen"
+    mode: single
     trigger:
       - platform: state
         entity_id: lawn_mower.goaty

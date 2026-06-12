@@ -32,6 +32,8 @@ Repeat that for all configured zones.
 ## Notes
 
 - Zone data is persisted in HA storage under `goaty_zone.zone_config`.
-- `sensor.goaty_zones` exposes the full zone list and the derived config attributes.
+- `sensor.goaty_zones` is the source of truth for the card and exposes the derived config attributes.
+- `input_text.goaty_zones_json` and `input_text.goaty_zones_hash` remain only as compatibility/debug mirrors.
 - `goaty_zone.get_due_zones` is the service to use from automations.
 - `example_packages/goaty_automations.yaml` is a template and must be adapted to the real zone IDs.
+- There are no per-zone scripts or `shell_command.goaty_*` helpers left in the repo.
