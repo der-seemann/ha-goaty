@@ -5,16 +5,20 @@ class GoatyZonesCard extends HTMLElement {
     this._config = {
       title: "Goaty",
       zones_entity: "sensor.goaty_zones",
-      mower_entity: "lawn_mower.goaty",
+      mower_entity: "vacuum.goaty_map_proxy",
       battery_entity: "sensor.goaty_batterie",
+      status_entity: "sensor.goaty_mahstatus",
+      fault_entity: "sensor.goaty_effektiver_fehler",
       active_zone_entity: "input_text.goaty_current_zone_name",
       zone_active_bool: "input_boolean.goaty_zone_active",
+      dock_domain: "vacuum",
+      dock_service: "return_to_base",
       mow_domain: "goaty_zone",
       mow_service: "mow_zone",
       reload_domain: "goaty_zone",
       reload_service: "reload_zones",
     };
-    console.info("GOATY-ZONES-CARD v1.0.0");
+    console.info("GOATY-ZONES-CARD v1.1.0");
   }
 
   setConfig(config) {
@@ -84,7 +88,20 @@ class GoatyZonesCard extends HTMLElement {
     return stateObj?.state || "";
   }
 
+  _status() {
+    const stateObj = this._hass?.states?.[this._config.status_entity];
+    return stateObj?.state || "";
+  }
+
+  _fault() {
+    const stateObj = this._hass?.states?.[this._config.fault_entity];
+    return stateObj?.state || "";
+  }
+
   _guessDockDomain() {
+    if (this._config.dock_domain) {
+      return this._config.dock_domain;
+    }
     const entity = this._config.mower_entity || "";
     return entity.includes(".") ? entity.split(".", 1)[0] : "vacuum";
   }
@@ -131,6 +148,8 @@ class GoatyZonesCard extends HTMLElement {
     const zones = this._zones();
     const activeZone = this._activeZone();
     const battery = this._battery();
+    const status = this._status();
+    const fault = this._fault();
     const zoneActive = this._zoneActive();
     const esc = this._escape.bind(this);
 
@@ -292,6 +311,8 @@ class GoatyZonesCard extends HTMLElement {
             </div>
             <div class="badges">
               <div class="badge ${zoneActive ? "ok" : "warn"}">${zoneActive ? "aktiv" : "bereit"}</div>
+              ${status !== "" ? `<div class="badge">${esc(status)}</div>` : ""}
+              ${fault !== "" ? `<div class="badge ${String(fault) !== "0" ? "warn" : "ok"}">Fehler ${esc(fault)}</div>` : ""}
               ${battery !== "" ? `<div class="badge">Akku ${esc(battery)}%</div>` : ""}
             </div>
           </div>

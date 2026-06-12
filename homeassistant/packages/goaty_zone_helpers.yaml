@@ -13,3 +13,33 @@ input_select:
     name: "Goaty Mähzone"
     options:
       - "Keine Zonen"
+
+template:
+  - sensor:
+      - name: "Goaty Fällige Zonen"
+        unique_id: goaty_faellige_zonen
+        icon: mdi:mower-on
+        state: >-
+          {% set zones = state_attr('sensor.goaty_zones', 'zones') | default([], true) %}
+          {{ zones | selectattr('is_due', 'eq', true) | list | count }}
+        attributes:
+          zones: >-
+            {% set zones = state_attr('sensor.goaty_zones', 'zones') | default([], true) %}
+            {{ zones | selectattr('is_due', 'eq', true) | list }}
+          names: >-
+            {% set zones = state_attr('sensor.goaty_zones', 'zones') | default([], true) %}
+            {{ zones | selectattr('is_due', 'eq', true) | map(attribute='name') | list | join(', ') }}
+
+      - name: "Goaty Gesperrte Zonen"
+        unique_id: goaty_gesperrte_zonen
+        icon: mdi:lock
+        state: >-
+          {% set zones = state_attr('sensor.goaty_zones', 'zones') | default([], true) %}
+          {{ zones | selectattr('locked', 'eq', true) | list | count }}
+        attributes:
+          zones: >-
+            {% set zones = state_attr('sensor.goaty_zones', 'zones') | default([], true) %}
+            {{ zones | selectattr('locked', 'eq', true) | list }}
+          names: >-
+            {% set zones = state_attr('sensor.goaty_zones', 'zones') | default([], true) %}
+            {{ zones | selectattr('locked', 'eq', true) | map(attribute='name') | list | join(', ') }}
