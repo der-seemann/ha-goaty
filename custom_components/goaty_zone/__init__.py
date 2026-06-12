@@ -14,6 +14,7 @@ import voluptuous as vol
 
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
@@ -33,6 +34,19 @@ EMPTY_SELECT_OPTION = "Keine Zonen"
 _LOGGER = logging.getLogger(__name__)
 GOATY_SENSOR: "GoatyZonesSensor | None" = None
 ZONE_STORE: "GoatyZoneStore | None" = None
+
+
+def _configured_device_name(hass: HomeAssistant) -> str:
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if entries:
+        data = entries[0].data or {}
+        device_name = str(data.get("device_name") or "").strip()
+        if device_name:
+            return device_name
+        mower_entity_id = str(data.get("mower_entity_id") or "").strip()
+        if mower_entity_id:
+            return mower_entity_id
+    return DEFAULT_DEVICE_NAME
 
 
 class GoatyZonesSensor(SensorEntity):
@@ -617,7 +631,8 @@ async def _handle_get_zones_impl(
     *,
     force_update: bool,
 ) -> None:
-    device = _find_device(hass, call.data.get("device_name", DEFAULT_DEVICE_NAME))
+    device_name = str(call.data.get("device_name") or _configured_device_name(hass)).strip()
+    device = _find_device(hass, device_name)
     source = "device"
     try:
         zones = await _fetch_zones_from_device(hass, device)
@@ -673,7 +688,7 @@ async def _handle_mow_zone_impl(hass: HomeAssistant, call: ServiceCall) -> None:
         raise ValueError("zone_id must be a decimal Ecovacs zone ID, e.g. 133")
 
     zone_name = str(call.data.get("zone_name", "")).strip()
-    device_name = call.data.get("device_name", DEFAULT_DEVICE_NAME)
+    device_name = str(call.data.get("device_name") or _configured_device_name(hass)).strip()
     angle = ZONE_STORE.next_angle(zone_id) if ZONE_STORE is not None else 0
     device = _find_device(hass, device_name)
     info = getattr(device, "device_info", {}) or {}
@@ -976,4 +991,18 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         schema=vol.Schema({}),
         supports_response=SupportsResponse.OPTIONAL,
     )
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Store config entry data for the future phased refactor."""
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = dict(entry.data)
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    domain_data = hass.data.get(DOMAIN)
+    if isinstance(domain_data, dict):
+        domain_data.pop(entry.entry_id, None)
     return True
