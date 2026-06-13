@@ -8,7 +8,6 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
 from .coordinator import GoatyCoordinator
@@ -19,72 +18,108 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up reload and per-zone action buttons."""
+    """Set up mower control buttons."""
     domain_data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
     runtime_data = entry.runtime_data or {}
     coordinator: GoatyCoordinator = (
         domain_data.get("coordinator")
         or runtime_data["coordinator"]
     )
-    store = domain_data.get("store") or runtime_data["zone_store"]
-    zones = store.get_all().values() if store is not None else []
-    entities: list[ButtonEntity] = [GoatyReloadZonesButton(coordinator)]
-    entities.extend(GoatyZoneMarkMowedButton(coordinator, store, zone) for zone in zones if zone.get("id"))
-    async_add_entities(entities)
+    mower_entity_id = str(entry.data.get("mower_entity_id") or "").strip()
+    if not mower_entity_id:
+        return
 
-    async def _handle_zone_update(zones: list[dict[str, Any]]) -> None:
-        existing_ids = {entity.zone_id for entity in entities if hasattr(entity, "zone_id")}
-        new_entities = [
-            GoatyZoneMarkMowedButton(coordinator, store, zone)
-            for zone in zones
-            if zone.get("id") and str(zone.get("id")) not in existing_ids
+    async_add_entities(
+        [
+            GoatyPauseButton(entry, mower_entity_id),
+            GoatyDockButton(entry, mower_entity_id),
+            GoatyMowButton(entry, mower_entity_id, coordinator, domain_data.get("store") or runtime_data["zone_store"]),
         ]
-        if new_entities:
-            async_add_entities(new_entities)
-            entities.extend(new_entities)
-
-    domain_data.setdefault("zone_update_callbacks", []).append(_handle_zone_update)
+    )
 
 
-class GoatyReloadZonesButton(CoordinatorEntity[GoatyCoordinator], ButtonEntity):
-    """Reload the zone list from the mower."""
+class GoatyPauseButton(ButtonEntity):
+    """Pause the mower."""
 
     _attr_has_entity_name = True
-    _attr_name = "Zonen neu laden"
-    _attr_icon = "mdi:refresh"
+    _attr_icon = "mdi:pause"
 
-    def __init__(self, coordinator: GoatyCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{DOMAIN}_reload_zones"
-
-    async def async_press(self) -> None:
-        await self.hass.services.async_call(DOMAIN, "reload_zones", {}, blocking=True)
-        await self.coordinator.async_request_refresh()
-
-
-class GoatyZoneMarkMowedButton(CoordinatorEntity[GoatyCoordinator], ButtonEntity):
-    """Mark one zone as mowed."""
-
-    _attr_has_entity_name = True
-    _attr_icon = "mdi:mower"
-
-    def __init__(self, coordinator: GoatyCoordinator, store: Any, zone: dict[str, Any]) -> None:
-        super().__init__(coordinator)
-        self._store = store
-        self._zone_id = str(zone.get("id") or "").strip()
-        self._zone_name = str(zone.get("name") or self._zone_id).strip()
-        self._attr_name = f"{self._zone_name} als gemäht"
-        self._attr_unique_id = f"{DOMAIN}_zone_{self._zone_id}_mark_mowed"
-
-    @property
-    def zone_id(self) -> str:
-        return self._zone_id
+    def __init__(self, entry: ConfigEntry, mower_entity_id: str) -> None:
+        self._mower = mower_entity_id
+        self._attr_unique_id = f"{entry.entry_id}_pause"
+        self._attr_name = f"{entry.data.get('device_name', 'Goaty')} Pause"
 
     async def async_press(self) -> None:
         await self.hass.services.async_call(
-            DOMAIN,
-            "mark_zone_mowed",
-            {"zone_id": self._zone_id, "advance_angle": True},
+            "lawn_mower",
+            "pause",
+            {"entity_id": self._mower},
             blocking=True,
         )
-        await self.coordinator.async_request_refresh()
+
+
+class GoatyDockButton(ButtonEntity):
+    """Dock the mower."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:home-import-outline"
+
+    def __init__(self, entry: ConfigEntry, mower_entity_id: str) -> None:
+        self._mower = mower_entity_id
+        self._attr_unique_id = f"{entry.entry_id}_dock"
+        self._attr_name = f"{entry.data.get('device_name', 'Goaty')} Dock"
+
+    async def async_press(self) -> None:
+        await self.hass.services.async_call(
+            "lawn_mower",
+            "dock",
+            {"entity_id": self._mower},
+            blocking=True,
+        )
+
+
+class GoatyMowButton(ButtonEntity):
+    """Start mowing the selected zone or the whole lawn."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:mower-on"
+
+    def __init__(self, entry: ConfigEntry, mower_entity_id: str, coordinator: GoatyCoordinator, store: Any) -> None:
+        self._mower = mower_entity_id
+        self._coordinator = coordinator
+        self._store = store
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_mow"
+        self._attr_name = f"{entry.data.get('device_name', 'Goaty')} Mähen"
+
+    async def async_press(self) -> None:
+        domain_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        zone_select = domain_data.get("zone_select")
+        direction_select = domain_data.get("direction_select")
+
+        zone_id = zone_select.get_selected_zone_id() if zone_select else None
+        angle = direction_select.get_angle() if direction_select else None
+
+        if zone_id is None:
+            await self.hass.services.async_call(
+                "lawn_mower",
+                "start_mowing",
+                {"entity_id": self._mower},
+                blocking=True,
+            )
+            return
+
+        zone = self._store.get(zone_id) if self._store is not None else {}
+        if angle is None:
+            angle = self._store.next_angle(zone_id) if self._store is not None else 0
+
+        await self.hass.services.async_call(
+            DOMAIN,
+            "mow_zone",
+            {
+                "zone_id": zone_id,
+                "zone_name": zone.get("name", zone_id),
+                "angle": angle,
+            },
+            blocking=True,
+        )

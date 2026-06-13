@@ -13,9 +13,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import DOMAIN
 from .coordinator import GoatyCoordinator
 
-_FIXED_DIRECTION_OPTIONS = ["Auto", "0°", "45°", "90°", "135°"]
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -141,10 +138,6 @@ class GoatyDirectionSelect(CoordinatorEntity[GoatyCoordinator], SelectEntity):
             angles = [0]
 
         options = ["Auto"]
-        for angle in _FIXED_DIRECTION_OPTIONS[1:]:
-            if angle not in options:
-                options.append(angle)
-
         for angle in angles:
             try:
                 angle_text = f"{int(angle)}°"

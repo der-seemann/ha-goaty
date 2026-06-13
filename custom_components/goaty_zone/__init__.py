@@ -694,7 +694,14 @@ async def _handle_mow_zone_impl(hass: HomeAssistant, call: ServiceCall) -> None:
 
     zone_name = str(call.data.get("zone_name", "")).strip()
     device_name = str(call.data.get("device_name") or _configured_device_name(hass)).strip()
-    angle = ZONE_STORE.next_angle(zone_id) if ZONE_STORE is not None else 0
+    angle_value = call.data.get("angle")
+    if angle_value is None:
+        angle = ZONE_STORE.next_angle(zone_id) if ZONE_STORE is not None else 0
+    else:
+        try:
+            angle = int(angle_value)
+        except (TypeError, ValueError):
+            angle = ZONE_STORE.next_angle(zone_id) if ZONE_STORE is not None else 0
     device = _find_device(hass, device_name)
     info = getattr(device, "device_info", {}) or {}
     _LOGGER.warning(
@@ -962,6 +969,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 vol.Required("zone_id"): cv.string,
                 vol.Optional("zone_name", default=""): cv.string,
                 vol.Optional("device_name", default=DEFAULT_DEVICE_NAME): cv.string,
+                vol.Optional("angle"): vol.Coerce(int),
             }
         ),
     )
