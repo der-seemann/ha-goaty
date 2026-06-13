@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import inspect
 import logging
 import os
 import re
@@ -14,7 +13,6 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components import frontend
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.components.lovelace import dashboard as lovelace_dashboard
 from homeassistant.components.sensor import SensorEntity
@@ -77,14 +75,6 @@ async def _register_goaty_card_resources(hass: HomeAssistant) -> None:
             )
         except Exception:
             _LOGGER.exception("Failed to register Goaty card static path: %s", resource_path)
-        try:
-            from homeassistant.components.frontend import async_register_extra_module_url
-
-            result = async_register_extra_module_url(hass, resource_path)
-            if inspect.isawaitable(result):
-                await result
-        except Exception:
-            _LOGGER.debug("Frontend extra module registration not available for %s", resource_path, exc_info=True)
 
 
 class GoatyConfigView(HomeAssistantView):
