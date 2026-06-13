@@ -19,8 +19,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up coordinator-backed Goaty sensors."""
-    runtime_data = entry.runtime_data
-    coordinator: GoatyCoordinator = runtime_data["coordinator"]
+    domain_data = hass.data.get("goaty_zone", {})
+    runtime_data = entry.runtime_data or {}
+    coordinator: GoatyCoordinator = (
+        domain_data.get(entry.entry_id, {}).get("coordinator")
+        or runtime_data["coordinator"]
+    )
 
     entities: list[GoatyCoordinatorSensor] = [
         GoatyMowingWindowSensor(coordinator),

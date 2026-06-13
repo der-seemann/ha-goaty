@@ -20,8 +20,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up one lock switch per zone."""
+    domain_data = hass.data.get(DOMAIN, {})
     runtime_data = entry.runtime_data or {}
-    coordinator: GoatyCoordinator = runtime_data["coordinator"]
+    coordinator: GoatyCoordinator = (
+        domain_data.get(entry.entry_id, {}).get("coordinator")
+        or runtime_data["coordinator"]
+    )
     zones = coordinator.data.get("zones", []) if coordinator.data else []
     async_add_entities([GoatyZoneLockSwitch(coordinator, zone) for zone in zones if zone.get("id")])
 

@@ -788,6 +788,24 @@ async def _refresh_sensor_from_known_zones(hass: HomeAssistant) -> None:
         _apply_sensor_state(hass, zones, _zones_hash(zones))
 
 
+async def _refresh_coordinators(hass: HomeAssistant) -> None:
+    """Refresh all Goaty coordinators after storage changes."""
+    domain_data = hass.data.get(DOMAIN)
+    if not isinstance(domain_data, dict):
+        return
+
+    for entry_data in domain_data.values():
+        if not isinstance(entry_data, dict):
+            continue
+        coordinator = entry_data.get("coordinator")
+        if coordinator is None:
+            continue
+        try:
+            await coordinator.async_request_refresh()
+        except Exception:
+            _LOGGER.debug("Failed to refresh Goaty coordinator", exc_info=True)
+
+
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Register Goaty zone services and sensor."""
 
@@ -853,6 +871,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 payload[key] = call.data[key]
         result = await ZONE_STORE.async_update(zone_id, **payload)
         await _refresh_sensor_from_known_zones(hass)
+        await _refresh_coordinators(hass)
         _LOGGER.info("GOAT zone config updated for zone_id=%s -> %s", zone_id, result)
         return result
 
@@ -863,6 +882,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         locked_until = call.data.get("until") or call.data.get("locked_until")
         result = await ZONE_STORE.async_lock(zone_id, locked_until=locked_until)
         await _refresh_sensor_from_known_zones(hass)
+        await _refresh_coordinators(hass)
         _LOGGER.info("GOAT zone locked for zone_id=%s -> %s", zone_id, result)
         return result
 
@@ -872,6 +892,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         zone_id = str(call.data["zone_id"]).strip()
         result = await ZONE_STORE.async_unlock(zone_id)
         await _refresh_sensor_from_known_zones(hass)
+        await _refresh_coordinators(hass)
         _LOGGER.info("GOAT zone unlocked for zone_id=%s -> %s", zone_id, result)
         return result
 
@@ -881,6 +902,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         zone_id = str(call.data["zone_id"]).strip()
         result = await ZONE_STORE.async_reset_timer(zone_id)
         await _refresh_sensor_from_known_zones(hass)
+        await _refresh_coordinators(hass)
         _LOGGER.info("GOAT zone timer reset for zone_id=%s -> %s", zone_id, result)
         return result
 
@@ -892,6 +914,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         advance_angle = bool(call.data.get("advance_angle", True))
         result = await ZONE_STORE.async_mark_mowed(zone_id, last_mowed=last_mowed, advance_angle=advance_angle)
         await _refresh_sensor_from_known_zones(hass)
+        await _refresh_coordinators(hass)
         _LOGGER.info("GOAT zone marked mowed for zone_id=%s -> %s", zone_id, result)
         return result
 
@@ -1009,7 +1032,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
         "zone_store": ZONE_STORE,
     }
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = dict(entry.data)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "config": dict(entry.data),
+        "coordinator": coordinator,
+        "store": ZONE_STORE,
+    }
     await hass.config_entries.async_forward_entry_setups(
         entry,
         [Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON],
