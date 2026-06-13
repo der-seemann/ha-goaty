@@ -51,7 +51,7 @@ async def async_setup_entry(
 class GoatyZoneLockSwitch(CoordinatorEntity[GoatyCoordinator], SwitchEntity):
     """Lock or unlock a specific mowing zone."""
 
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False
     _attr_icon = "mdi:lock"
 
     def __init__(self, coordinator: GoatyCoordinator, store: Any, zone: dict[str, Any]) -> None:
@@ -59,7 +59,7 @@ class GoatyZoneLockSwitch(CoordinatorEntity[GoatyCoordinator], SwitchEntity):
         self._store = store
         self._zone_id = str(zone.get("id") or "").strip()
         self._zone_name = str(zone.get("name") or self._zone_id).strip()
-        self._attr_name = f"{self._zone_name} Sperre"
+        self._attr_name = f"Goaty {self._zone_name} Sperre"
         self._attr_unique_id = f"{DOMAIN}_zone_{self._zone_id}_lock"
 
     @property

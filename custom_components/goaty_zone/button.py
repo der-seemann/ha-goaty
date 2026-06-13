@@ -13,6 +13,12 @@ from . import DOMAIN
 from .coordinator import GoatyCoordinator
 
 
+def _button_label(entry: ConfigEntry, suffix: str) -> str:
+    device_name = str(entry.data.get("device_name") or "").strip()
+    base = device_name if device_name and device_name.lower() != "goaty" else "Goaty"
+    return f"{base} {suffix}"
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -41,13 +47,13 @@ async def async_setup_entry(
 class GoatyPauseButton(ButtonEntity):
     """Pause the mower."""
 
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False
     _attr_icon = "mdi:pause"
 
     def __init__(self, entry: ConfigEntry, mower_entity_id: str) -> None:
         self._mower = mower_entity_id
         self._attr_unique_id = f"{entry.entry_id}_pause"
-        self._attr_name = f"{entry.data.get('device_name', 'Goaty')} Pause"
+        self._attr_name = _button_label(entry, "Pause")
 
     async def async_press(self) -> None:
         await self.hass.services.async_call(
@@ -61,13 +67,13 @@ class GoatyPauseButton(ButtonEntity):
 class GoatyDockButton(ButtonEntity):
     """Dock the mower."""
 
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False
     _attr_icon = "mdi:home-import-outline"
 
     def __init__(self, entry: ConfigEntry, mower_entity_id: str) -> None:
         self._mower = mower_entity_id
         self._attr_unique_id = f"{entry.entry_id}_dock"
-        self._attr_name = f"{entry.data.get('device_name', 'Goaty')} Dock"
+        self._attr_name = _button_label(entry, "Dock")
 
     async def async_press(self) -> None:
         await self.hass.services.async_call(
@@ -81,7 +87,7 @@ class GoatyDockButton(ButtonEntity):
 class GoatyMowButton(ButtonEntity):
     """Start mowing the selected zone or the whole lawn."""
 
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False
     _attr_icon = "mdi:mower-on"
 
     def __init__(self, entry: ConfigEntry, mower_entity_id: str, coordinator: GoatyCoordinator, store: Any) -> None:
@@ -90,7 +96,7 @@ class GoatyMowButton(ButtonEntity):
         self._store = store
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_mow"
-        self._attr_name = f"{entry.data.get('device_name', 'Goaty')} Mähen"
+        self._attr_name = _button_label(entry, "Mähen")
 
     async def async_press(self) -> None:
         domain_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})

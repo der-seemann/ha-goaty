@@ -30,6 +30,7 @@ CARD_RESOURCE_PATH = "/local/goaty-zones-card.js"
 CARD_SOURCE = "custom_components/goaty_zone/www/goaty-zones-card.js"
 STORAGE_KEY = "goaty_zone.zone_config"
 STORAGE_VERSION = 1
+POSITION_DUMP_PATH = Path("/config/goaty_position_live_last.json")
 ZONES_TEXT_ENTITY = "input_text.goaty_zones_json"
 ZONES_HASH_ENTITY = "input_text.goaty_zones_hash"
 ZONES_SELECT_ENTITY = "input_select.goaty_mow_zone"
@@ -56,7 +57,7 @@ def _configured_device_name(hass: HomeAssistant) -> str:
 class GoatyZonesSensor(SensorEntity):
     """Store the current GOAT zones as sensor attributes."""
 
-    _attr_name = "Goaty Zones"
+    _attr_name = "Goaty Zonen"
     _attr_icon = "mdi:map-legend"
     _attr_unique_id = "goaty_zones_sensor"
     _attr_has_entity_name = False
@@ -507,6 +508,52 @@ def _load_cached_zones_from_dump() -> list[dict[str, str]]:
 
 async def _load_cached_zones_from_dump_async(hass: HomeAssistant) -> list[dict[str, str]]:
     return await hass.async_add_executor_job(_load_cached_zones_from_dump)
+
+
+def _load_last_goat_position() -> dict[str, Any]:
+    if not POSITION_DUMP_PATH.exists():
+        return {}
+
+    try:
+        payload = json.loads(POSITION_DUMP_PATH.read_text())
+    except Exception:
+        _LOGGER.exception("Failed to read Goaty position dump")
+        return {}
+
+    body = payload.get("body") if isinstance(payload, dict) else {}
+    robot_pos = str(payload.get("robotPos") or body.get("robotPos") or "").strip()
+    charger_pos = str(payload.get("chargerPos") or body.get("chargerPos") or "").strip()
+
+    def _parse_triplet(value: str) -> tuple[float | None, float | None, float | None]:
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        if len(parts) < 2:
+            return None, None, None
+        try:
+            x = float(parts[0])
+            y = float(parts[1])
+            heading = float(parts[2]) if len(parts) > 2 else None
+            return x, y, heading
+        except ValueError:
+            return None, None, None
+
+    robot_x, robot_y, robot_heading = _parse_triplet(robot_pos)
+    charger_x, charger_y, _ = _parse_triplet(charger_pos)
+
+    return {
+        "robot_x": robot_x,
+        "robot_y": robot_y,
+        "robot_heading": robot_heading,
+        "robot_battery": body.get("battery") if isinstance(body, dict) else None,
+        "robot_state": body.get("robotState") if isinstance(body, dict) else None,
+        "charger_x": charger_x,
+        "charger_y": charger_y,
+        "source": payload.get("message_name") if isinstance(payload, dict) else None,
+        "updated_at": payload.get("updated_at") if isinstance(payload, dict) else None,
+    }
+
+
+async def _restore_last_goat_position(hass: HomeAssistant) -> dict[str, Any]:
+    return await hass.async_add_executor_job(_load_last_goat_position)
 
 
 def _zones_hash(zones: list[dict[str, str]]) -> str:
@@ -1057,6 +1104,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = GoatyCoordinator(hass, entry, ZONE_STORE)
     await coordinator.async_config_entry_first_refresh()
+    position = await _restore_last_goat_position(hass)
 
     entry.runtime_data = {
         "coordinator": coordinator,
@@ -1066,6 +1114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "config": dict(entry.data),
         "coordinator": coordinator,
         "store": ZONE_STORE,
+        "position": position,
         "zone_update_callbacks": [],
     }
     await hass.config_entries.async_forward_entry_setups(

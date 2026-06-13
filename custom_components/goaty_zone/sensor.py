@@ -25,12 +25,16 @@ async def async_setup_entry(
         domain_data.get(entry.entry_id, {}).get("coordinator")
         or runtime_data["coordinator"]
     )
+    position_data = domain_data.setdefault(entry.entry_id, {}).get("position", {})
 
     entities: list[GoatyCoordinatorSensor] = [
         GoatyMowingWindowSensor(coordinator),
         GoatyDueZonesSensor(coordinator),
         GoatyLockedZonesSensor(coordinator),
         GoatyMowerStateSensor(coordinator),
+        GoatyPositionSensor(domain_data.setdefault(entry.entry_id, {}), entry.entry_id, "x", "Position X", "cm", position_data),
+        GoatyPositionSensor(domain_data.setdefault(entry.entry_id, {}), entry.entry_id, "y", "Position Y", "cm", position_data),
+        GoatyPositionSensor(domain_data.setdefault(entry.entry_id, {}), entry.entry_id, "heading", "Position Heading", "°", position_data),
     ]
     async_add_entities(entities)
 
@@ -38,7 +42,7 @@ async def async_setup_entry(
 class GoatyCoordinatorSensor(CoordinatorEntity[GoatyCoordinator], SensorEntity):
     """Base sensor bound to the Goaty coordinator."""
 
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False
 
     def __init__(self, coordinator: GoatyCoordinator, key: str, name: str, icon: str) -> None:
         super().__init__(coordinator)
@@ -56,7 +60,7 @@ class GoatyMowingWindowSensor(GoatyCoordinatorSensor):
     """Expose mowing window state."""
 
     def __init__(self, coordinator: GoatyCoordinator) -> None:
-        super().__init__(coordinator, "mowing_window", "Mähfenster", "mdi:weather-sunset")
+        super().__init__(coordinator, "mowing_window", "Goaty Mähfenster", "mdi:weather-sunset")
 
     @property
     def native_value(self) -> str:
@@ -80,7 +84,7 @@ class GoatyDueZonesSensor(GoatyCoordinatorSensor):
     """Expose the number of due zones."""
 
     def __init__(self, coordinator: GoatyCoordinator) -> None:
-        super().__init__(coordinator, "due_zones", "Fällige Zonen", "mdi:mower-on")
+        super().__init__(coordinator, "due_zones", "Goaty Fällige Zonen", "mdi:mower-on")
 
     @property
     def native_value(self) -> int:
@@ -99,7 +103,7 @@ class GoatyLockedZonesSensor(GoatyCoordinatorSensor):
     """Expose the number of locked zones."""
 
     def __init__(self, coordinator: GoatyCoordinator) -> None:
-        super().__init__(coordinator, "locked_zones", "Gesperrte Zonen", "mdi:lock")
+        super().__init__(coordinator, "locked_zones", "Goaty Gesperrte Zonen", "mdi:lock")
 
     @property
     def native_value(self) -> int:
@@ -118,7 +122,7 @@ class GoatyMowerStateSensor(GoatyCoordinatorSensor):
     """Expose the mower state from Home Assistant."""
 
     def __init__(self, coordinator: GoatyCoordinator) -> None:
-        super().__init__(coordinator, "mower_state", "Mäherstatus", "mdi:mower")
+        super().__init__(coordinator, "mower_state", "Goaty Mäherstatus", "mdi:mower")
 
     @property
     def native_value(self) -> str:
@@ -127,3 +131,59 @@ class GoatyMowerStateSensor(GoatyCoordinatorSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return dict(self._data.get("mower_state_attributes", {}))
+
+
+class GoatyPositionSensor(SensorEntity):
+    """Expose the last known GOAT position."""
+
+    _attr_has_entity_name = False
+
+    def __init__(self, domain_data: dict[str, Any], entry_id: str, axis: str, name: str, unit: str, position_data: dict[str, Any] | None = None) -> None:
+        self._domain_data = domain_data
+        self._entry_id = entry_id
+        self._axis = axis
+        self._position_data = dict(position_data or {})
+        self._attr_name = f"Goaty {name}"
+        self._attr_unique_id = f"{entry_id}_position_{axis}"
+        self._attr_native_unit_of_measurement = unit
+        self._attr_icon = "mdi:crosshairs-gps" if axis != "heading" else "mdi:compass-outline"
+
+    def set_position_data(self, position_data: dict[str, Any]) -> None:
+        self._position_data = dict(position_data)
+        self._domain_data["position"] = self._position_data
+        if self.hass is not None:
+            self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        return self._axis_key() in self._position_data or self._axis_key() in self._domain_data.get("position", {})
+
+    def _axis_key(self) -> str:
+        return {
+            "x": "robot_x",
+            "y": "robot_y",
+            "heading": "robot_heading",
+        }.get(self._axis, self._axis)
+
+    @property
+    def native_value(self) -> float | None:
+        source = self._domain_data.get("position", self._position_data)
+        value = source.get(self._axis_key())
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        source = self._domain_data.get("position", self._position_data)
+        return {
+            "source": source.get("source"),
+            "updated_at": source.get("updated_at"),
+            "robot_state": source.get("robot_state"),
+            "robot_battery": source.get("robot_battery"),
+            "charger_x": source.get("charger_x"),
+            "charger_y": source.get("charger_y"),
+        }
