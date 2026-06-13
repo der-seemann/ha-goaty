@@ -8,12 +8,72 @@
         "data": {
           "mower_entity_id": "GOAT-Entität"
         }
+      },
+      "image": {
+        "title": "Luftbild wählen",
+        "description": "Wähle, woher das Kartenbild geladen werden soll.",
+        "data": {
+          "image_source": "Bildquelle"
+        }
+      },
+      "image_url": {
+        "title": "Bild per URL laden",
+        "description": "Lädt das Bild herunter und speichert es als lokale Karte.",
+        "data": {
+          "image_url": "Bild-URL"
+        }
+      },
+      "image_file": {
+        "title": "Lokale Bilddatei",
+        "description": "Verwende eine vorhandene Datei aus /config/www/.",
+        "data": {
+          "image_filename": "Dateiname"
+        }
+      },
+      "calibration": {
+        "title": "Kalibrierung",
+        "description": "Trage die Karten-Grenzen und die Position der Ladestation ein.",
+        "data": {
+          "charger_lat": "Ladestation Breite",
+          "charger_lon": "Ladestation Länge",
+          "min_lat": "Min. Breite",
+          "max_lat": "Max. Breite",
+          "min_lon": "Min. Länge",
+          "max_lon": "Max. Länge",
+          "img_width": "Bildbreite",
+          "img_height": "Bildhöhe"
+        }
+      },
+      "timewindow": {
+        "title": "Mähfenster",
+        "description": "Definiere Sonnen- oder Zeitfenster für Start und Ende.",
+        "data": {
+          "start_mode": "Startmodus",
+          "start_offset": "Start-Offset",
+          "start_time": "Startzeit",
+          "end_mode": "Endmodus",
+          "end_offset": "End-Offset",
+          "end_time": "Endzeit",
+          "rain_delay": "Regenverzögerung",
+          "rain_sensor": "Regensensor"
+        }
+      },
+      "finish": {
+        "title": "Fertig",
+        "description": "Prüfe die Zusammenfassung und lege die Integration an."
       }
     },
     "error": {
       "no_mower_entities": "Keine lawn_mower-Entitäten gefunden",
       "no_device": "Gerät konnte nicht aufgelöst werden",
-      "already_configured": "Dieses Gerät ist bereits eingerichtet"
+      "already_configured": "Dieses Gerät ist bereits eingerichtet",
+      "http_error": "Bild konnte nicht geladen werden",
+      "not_an_image": "Die Quelle liefert kein Bild",
+      "download_failed": "Bild-Download fehlgeschlagen",
+      "file_not_found": "Datei nicht gefunden",
+      "invalid_coordinates": "Ungültige Koordinaten",
+      "invalid_timewindow": "Ungültiges Zeitfenster",
+      "invalid_mode": "Ungültiger Modus"
     },
     "abort": {
       "no_mower_entities": "Keine lawn_mower-Entitäten gefunden",
