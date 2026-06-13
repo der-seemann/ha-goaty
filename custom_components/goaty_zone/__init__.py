@@ -816,7 +816,11 @@ def _zone_summary_card(zone: dict[str, Any]) -> dict[str, Any]:
 def _build_dashboard(title: str, slug: str, zones: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
     mower_entity_id = str(config.get("mower_entity_id") or "").strip()
     mower_entity_id = mower_entity_id or "lawn_mower.goaty"
-    zone_cards = [_zone_summary_card(zone) for zone in zones] or [
+    enriched_zones = [
+        {"id": str(zone_id), **dict(zone)}
+        for zone_id, zone in config.get("zones_map", {}).items()
+    ] if isinstance(config.get("zones_map"), dict) else zones
+    zone_cards = [_zone_summary_card(zone) for zone in enriched_zones] or [
         {
             "type": "markdown",
             "content": "Noch keine Zonen vorhanden. Erst Zonen abrufen, dann Dashboard neu bauen.",
@@ -1454,7 +1458,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 if isinstance(entry_data, dict) and isinstance(entry_data.get("config"), dict):
                     config = dict(entry_data["config"])
                     break
-        zones = list(ZONE_STORE.get_all().values())
+        zones_map = ZONE_STORE.get_all()
+        zones = [{"id": zone_id, **dict(zone)} for zone_id, zone in zones_map.items()]
+        config["zones_map"] = zones_map
         dashboard = _build_dashboard(title, slug, zones, config)
         existing = await _load_existing_dashboard(hass, slug)
         if existing and not overwrite:
