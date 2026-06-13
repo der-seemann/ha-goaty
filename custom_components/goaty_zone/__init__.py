@@ -7,6 +7,7 @@ import json
 import inspect
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,6 @@ EMPTY_SELECT_OPTION = "Keine Zonen"
 _LOGGER = logging.getLogger(__name__)
 GOATY_SENSOR: "GoatyZonesSensor | None" = None
 ZONE_STORE: "GoatyZoneStore | None" = None
-VIEWS_REGISTERED = False
 
 
 def _configured_device_name(hass: HomeAssistant) -> str:
@@ -92,13 +92,12 @@ class GoatyConfigView(HomeAssistantView):
     name = "api:goaty_zone:config"
     requires_auth = True
 
-    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+    def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-        self._entry_id = entry_id
 
     async def get(self, request: Any) -> Any:
         domain_data = self._hass.data.get(DOMAIN, {})
-        entry_data = domain_data.get(self._entry_id, {}) if isinstance(domain_data, dict) else {}
+        entry_data = next(iter(domain_data.values()), {}) if isinstance(domain_data, dict) else {}
         cfg = dict(entry_data.get("config") or {})
         cal = dict(cfg.get("calibration") or {})
         return self.json(
@@ -199,25 +198,23 @@ class GoatyPathView(HomeAssistantView):
 
         y_idx = 0
         h_idx = 0
-        last_y: float | None = None
-        last_h: float | None = None
         points: list[dict[str, Any]] = []
 
         for ts, x in x_points:
-            while y_idx < len(y_points) and y_points[y_idx][0] <= ts:
-                last_y = y_points[y_idx][1]
+            while y_idx < len(y_points) and y_points[y_idx][0] < ts:
                 y_idx += 1
-            while h_idx < len(h_points) and h_points[h_idx][0] <= ts:
-                last_h = h_points[h_idx][1]
+            while h_idx < len(h_points) and h_points[h_idx][0] < ts:
                 h_idx += 1
-            if last_y is None:
+            if y_idx >= len(y_points):
                 continue
+            y = y_points[y_idx][1]
+            h = h_points[h_idx][1] if h_idx < len(h_points) else 0.0
             points.append(
                 {
                     "ts": ts.isoformat(),
                     "x": x,
-                    "y": last_y,
-                    "h": last_h if last_h is not None else 0.0,
+                    "y": y,
+                    "h": h,
                 }
             )
 
@@ -733,6 +730,215 @@ async def _restore_last_goat_position(hass: HomeAssistant) -> dict[str, Any]:
     return await hass.async_add_executor_job(_load_last_goat_position)
 
 
+def _slugify_title(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return slug or "goaty"
+
+
+def _button_card(
+    *,
+    name: str,
+    icon: str,
+    service: str,
+    data: dict[str, Any] | None = None,
+    entity: str | None = None,
+    show_state: bool = False,
+) -> dict[str, Any]:
+    card: dict[str, Any] = {
+        "type": "button",
+        "name": name,
+        "icon": icon,
+        "show_state": show_state,
+        "tap_action": {
+            "action": "call-service",
+            "service": service,
+            "service_data": data or {},
+        },
+    }
+    if entity:
+        card["entity"] = entity
+    return card
+
+
+def _zone_summary_card(zone: dict[str, Any]) -> dict[str, Any]:
+    zone_id = str(zone.get("id") or "").strip()
+    zone_name = str(zone.get("name") or zone_id).strip() or zone_id
+    angle = zone.get("current_angle")
+    locked = bool(zone.get("locked"))
+    due = bool(zone.get("is_due"))
+    last_mowed = zone.get("last_mowed") or "—"
+    state_text = "gesperrt" if locked else "frei"
+    return {
+        "type": "vertical-stack",
+        "cards": [
+            {
+                "type": "markdown",
+                "content": (
+                    f"### {zone_name}\n"
+                    f"- ID: `{zone_id}`\n"
+                    f"- Winkel: `{angle}`\n"
+                    f"- Status: `{state_text}`\n"
+                    f"- Fällig: `{ 'ja' if due else 'nein' }`\n"
+                    f"- Letztes Mähen: `{last_mowed}`"
+                ),
+            },
+            {
+                "type": "grid",
+                "columns": 3,
+                "square": False,
+                "cards": [
+                    _button_card(
+                        name="Mähen",
+                        icon="mdi:mower-on",
+                        service=f"{DOMAIN}.mow_zone",
+                        data={"zone_id": zone_id, "zone_name": zone_name, "angle": angle},
+                    ),
+                    _button_card(
+                        name="Sperren",
+                        icon="mdi:lock",
+                        service=f"{DOMAIN}.lock_zone",
+                        data={"zone_id": zone_id},
+                    ),
+                    _button_card(
+                        name="Freigeben",
+                        icon="mdi:lock-open-variant",
+                        service=f"{DOMAIN}.unlock_zone",
+                        data={"zone_id": zone_id},
+                    ),
+                ],
+            },
+        ],
+    }
+
+
+def _build_dashboard(title: str, slug: str, zones: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+    mower_entity_id = str(config.get("mower_entity_id") or "").strip()
+    mower_entity_id = mower_entity_id or "lawn_mower.goaty"
+    zone_cards = [_zone_summary_card(zone) for zone in zones]
+    if not zone_cards:
+        zone_cards = [
+            {
+                "type": "markdown",
+                "content": "Noch keine Zonen vorhanden. Erst Zonen abrufen, dann Dashboard neu erzeugen.",
+            }
+        ]
+
+    overview_cards = [
+        {
+            "type": "custom:goaty-map-card",
+            "title": title,
+            "hours": 24,
+            "position_update": 15,
+        },
+        {
+            "type": "custom:goaty-zones-card",
+            "title": title,
+            "zones_entity": "sensor.goaty_zones",
+            "mower_entity": mower_entity_id,
+            "mow_domain": DOMAIN,
+            "mow_service": "mow_zone",
+            "reload_domain": DOMAIN,
+            "reload_service": "reload_zones",
+        },
+        {
+            "type": "entities",
+            "title": "Goaty Status",
+            "show_header_toggle": False,
+            "entities": [
+                "sensor.goaty_mahfenster",
+                "sensor.goaty_fallige_zonen",
+                "sensor.goaty_gesperrte_zonen",
+                "sensor.goaty_maherstatus",
+                "sensor.goaty_position_x",
+                "sensor.goaty_position_y",
+                "sensor.goaty_position_heading",
+            ],
+        },
+        {
+            "type": "grid",
+            "title": "Schnellzugriff",
+            "columns": 3,
+            "square": False,
+            "cards": [
+                _button_card(
+                    name="Pause",
+                    icon="mdi:pause",
+                    service="lawn_mower.pause",
+                    data={"entity_id": mower_entity_id},
+                    entity="button.goaty_pause",
+                ),
+                _button_card(
+                    name="Dock",
+                    icon="mdi:home-import-outline",
+                    service="lawn_mower.dock",
+                    data={"entity_id": mower_entity_id},
+                    entity="button.goaty_dock",
+                ),
+                _button_card(
+                    name="Mähzonen laden",
+                    icon="mdi:reload",
+                    service=f"{DOMAIN}.reload_zones",
+                    data={},
+                ),
+            ],
+        },
+    ]
+
+    maintenance_cards = [
+        {
+            "type": "grid",
+            "title": "Wartung",
+            "columns": 2,
+            "square": False,
+            "cards": [
+                _button_card(
+                    name="Zonen abrufen",
+                    icon="mdi:download",
+                    service=f"{DOMAIN}.get_zones",
+                    data={},
+                ),
+                _button_card(
+                    name="Dashboard neu bauen",
+                    icon="mdi:view-dashboard",
+                    service=f"{DOMAIN}.create_dashboard",
+                    data={"dashboard_title": title, "overwrite": True},
+                ),
+            ],
+        }
+    ]
+
+    return {
+        "title": title,
+        "url_path": slug,
+        "icon": "mdi:mower",
+        "show_in_sidebar": True,
+        "mode": "storage",
+        "views": [
+            {
+                "title": "Übersicht",
+                "path": "overview",
+                "icon": "mdi:mower",
+                "type": "masonry",
+                "cards": overview_cards,
+            },
+            {
+                "title": "Zonen",
+                "path": "zonen",
+                "icon": "mdi:map-legend",
+                "type": "masonry",
+                "cards": zone_cards,
+            },
+            {
+                "title": "Wartung",
+                "path": "wartung",
+                "icon": "mdi:wrench",
+                "type": "masonry",
+                "cards": maintenance_cards,
+            },
+        ],
+    }
+
+
 def _zones_hash(zones: list[dict[str, str]]) -> str:
     new_json = json.dumps(sorted(zones, key=lambda zone: _zone_sort_key(zone["id"])), ensure_ascii=False, separators=(",", ":"))
     return hashlib.md5(new_json.encode("utf-8")).hexdigest()[:8]
@@ -1059,6 +1265,30 @@ async def _refresh_coordinators(hass: HomeAssistant) -> None:
             _LOGGER.debug("Failed to refresh Goaty coordinator", exc_info=True)
 
 
+def _dashboard_store_key(slug: str) -> str:
+    return f"lovelace.{slug}"
+
+
+async def _register_goaty_dashboard(hass: HomeAssistant, slug: str, dashboard: dict[str, Any]) -> None:
+    lovelace_data = hass.data.setdefault("lovelace", {})
+    dashboards = lovelace_data.setdefault("dashboards", {})
+    dashboards[slug] = dashboard
+    dashboards_by_url = lovelace_data.setdefault("dashboards_by_url_path", {})
+    dashboards_by_url[slug] = dashboard
+
+
+async def _load_existing_dashboard(hass: HomeAssistant, slug: str) -> dict[str, Any] | None:
+    store = Store(hass, 1, _dashboard_store_key(slug))
+    loaded = await store.async_load()
+    return loaded if isinstance(loaded, dict) else None
+
+
+async def _save_dashboard(hass: HomeAssistant, slug: str, dashboard: dict[str, Any]) -> None:
+    store = Store(hass, 1, _dashboard_store_key(slug))
+    await store.async_save(dashboard)
+    await _register_goaty_dashboard(hass, slug, dashboard)
+
+
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Register Goaty zone services and sensor."""
 
@@ -1070,6 +1300,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     await ZONE_STORE.async_load()
 
     await _register_goaty_card_resources(hass)
+    hass.http.register_view(GoatyConfigView(hass))
+    hass.http.register_view(GoatyPathView(hass))
 
     await _restore_sensor_from_cache(hass)
 
@@ -1170,6 +1402,54 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         _LOGGER.info("GOAT due zones requested -> %s", result)
         return result
 
+    async def handle_create_dashboard(call: ServiceCall) -> dict[str, Any]:
+        if ZONE_STORE is None:
+            return {"created": False, "reason": "zone_store_unavailable"}
+        title = str(call.data.get("dashboard_title") or DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
+        slug = _slugify_title(title)
+        overwrite = bool(call.data.get("overwrite", False))
+        config = {}
+        domain_data = hass.data.get(DOMAIN)
+        if isinstance(domain_data, dict):
+            for entry_data in domain_data.values():
+                if isinstance(entry_data, dict) and isinstance(entry_data.get("config"), dict):
+                    config = dict(entry_data["config"])
+                    break
+        zones = list(ZONE_STORE.get_all().values())
+        dashboard = _build_dashboard(title, slug, zones, config)
+        existing = await _load_existing_dashboard(hass, slug)
+        if existing and not overwrite:
+            await hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": "Goaty Dashboard",
+                    "message": (
+                        f"Dashboard '{slug}' existiert bereits. "
+                        "Setze overwrite: true, um es zu überschreiben."
+                    ),
+                    "notification_id": "goaty_dashboard_exists",
+                },
+                blocking=True,
+            )
+            return {"created": False, "slug": slug, "zone_count": len(zones)}
+
+        await _save_dashboard(hass, slug, dashboard)
+        await hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "title": "Goaty Dashboard erstellt",
+                "message": (
+                    f"Dashboard '{title}' wurde mit {len(zones)} Zonen erstellt. "
+                    "Browser neu laden."
+                ),
+                "notification_id": "goaty_dashboard_created",
+            },
+            blocking=True,
+        )
+        return {"created": True, "slug": slug, "zone_count": len(zones)}
+
     hass.services.async_register(DOMAIN, "get_zones", handle_get_zones, schema=vol.Schema({}))
     hass.services.async_register(
         DOMAIN,
@@ -1258,6 +1538,18 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         schema=vol.Schema({}),
         supports_response=SupportsResponse.OPTIONAL,
     )
+    hass.services.async_register(
+        DOMAIN,
+        "create_dashboard",
+        handle_create_dashboard,
+        schema=vol.Schema(
+            {
+                vol.Optional("dashboard_title", default=DEFAULT_DEVICE_NAME): cv.string,
+                vol.Optional("overwrite", default=False): cv.boolean,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     return True
 
 
@@ -1282,10 +1574,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "position": position,
         "zone_update_callbacks": [],
     }
-    if not VIEWS_REGISTERED:
-        hass.http.register_view(GoatyConfigView(hass, entry.entry_id))
-        hass.http.register_view(GoatyPathView(hass))
-        VIEWS_REGISTERED = True
     await hass.config_entries.async_forward_entry_setups(
         entry,
         [Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON],

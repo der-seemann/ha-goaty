@@ -93,6 +93,10 @@
     "reload_zones": {
       "name": "Zonen neu laden",
       "description": "Vergleicht aktuelle Zonen mit gespeicherten, aktualisiert bei Änderung."
+    },
+    "create_dashboard": {
+      "name": "Dashboard erstellen",
+      "description": "Erstellt oder überschreibt das dynamische Goaty-Dashboard."
     }
   }
 }

@@ -163,3 +163,21 @@ get_due_zones:
   name: "Fällige Zonen abfragen"
   description: "Gibt alle Zonen zurück die gemäht werden sollen."
   fields: {}
+
+create_dashboard:
+  name: "Dashboard erstellen"
+  description: "Erstellt oder überschreibt das dynamische Goaty-Dashboard."
+  fields:
+    dashboard_title:
+      name: "Dashboard-Titel"
+      description: "Titel des erzeugten Dashboards."
+      required: false
+      example: "Goaty"
+      selector:
+        text:
+    overwrite:
+      name: "Überschreiben"
+      description: "Vorhandenes Dashboard ersetzen."
+      required: false
+      selector:
+        boolean:
