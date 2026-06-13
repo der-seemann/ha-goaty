@@ -14,7 +14,9 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components import frontend
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
+from homeassistant.components.lovelace import dashboard as lovelace_dashboard
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -1289,12 +1291,27 @@ def _dashboard_store_key(slug: str) -> str:
     return f"lovelace.{slug}"
 
 
-async def _register_goaty_dashboard(hass: HomeAssistant, slug: str, dashboard: dict[str, Any]) -> None:
-    lovelace_data = hass.data.setdefault("lovelace", {})
-    dashboards = lovelace_data.setdefault("dashboards", {})
-    dashboards[slug] = dashboard
-    dashboards_by_url = lovelace_data.setdefault("dashboards_by_url_path", {})
-    dashboards_by_url[slug] = dashboard
+def _register_goaty_dashboard(
+    hass: HomeAssistant, slug: str, dashboard_config: dict[str, Any], update: bool
+) -> None:
+    """Register or update the Goaty panel in Lovelace."""
+    lovelace_data = hass.data.get("lovelace")
+    dashboards = getattr(lovelace_data, "dashboards", None)
+    if isinstance(dashboards, dict):
+        storage_config = {**dashboard_config, "id": slug, "url_path": slug}
+        dashboards[slug] = lovelace_dashboard.LovelaceStorage(hass, storage_config)
+
+    frontend.async_register_built_in_panel(
+        hass,
+        DOMAIN,
+        frontend_url_path=slug,
+        require_admin=bool(dashboard_config.get("require_admin", False)),
+        show_in_sidebar=bool(dashboard_config.get("show_in_sidebar", True)),
+        sidebar_title=str(dashboard_config.get("title") or DEFAULT_DEVICE_NAME),
+        sidebar_icon=str(dashboard_config.get("icon") or "mdi:robot-mower"),
+        config={"mode": "storage"},
+        update=update,
+    )
 
 
 async def _load_existing_dashboard(hass: HomeAssistant, slug: str) -> dict[str, Any] | None:
@@ -1303,10 +1320,12 @@ async def _load_existing_dashboard(hass: HomeAssistant, slug: str) -> dict[str, 
     return loaded if isinstance(loaded, dict) else None
 
 
-async def _save_dashboard(hass: HomeAssistant, slug: str, dashboard: dict[str, Any]) -> None:
+async def _save_dashboard(
+    hass: HomeAssistant, slug: str, dashboard: dict[str, Any], update: bool
+) -> None:
     store = Store(hass, 1, _dashboard_store_key(slug))
     await store.async_save(dashboard)
-    await _register_goaty_dashboard(hass, slug, dashboard)
+    _register_goaty_dashboard(hass, slug, dashboard, update)
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
@@ -1422,9 +1441,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         _LOGGER.info("GOAT due zones requested -> %s", result)
         return result
 
-    async def handle_create_dashboard(call: ServiceCall) -> dict[str, Any]:
+    async def handle_create_dashboard(call: ServiceCall) -> None:
         if ZONE_STORE is None:
-            return {"created": False, "reason": "zone_store_unavailable"}
+            return None
         title = str(call.data.get("dashboard_title") or DEFAULT_DEVICE_NAME).strip() or DEFAULT_DEVICE_NAME
         slug = "goaty"
         overwrite = bool(call.data.get("overwrite", False))
@@ -1452,9 +1471,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 },
                 blocking=True,
             )
-            return {"created": False, "slug": slug, "zone_count": len(zones)}
+            return None
 
-        await _save_dashboard(hass, slug, dashboard)
+        await _save_dashboard(hass, slug, dashboard, bool(existing))
         await hass.services.async_call(
             "persistent_notification",
             "create",
@@ -1465,10 +1484,10 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                     "Browser neu laden."
                 ),
                 "notification_id": "goaty_dashboard_created",
-            },
-            blocking=True,
-        )
-        return {"created": True, "slug": slug, "zone_count": len(zones)}
+                },
+                blocking=True,
+            )
+        return None
 
     hass.services.async_register(DOMAIN, "get_zones", handle_get_zones, schema=vol.Schema({}))
     hass.services.async_register(
@@ -1568,7 +1587,6 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 vol.Optional("overwrite", default=False): cv.boolean,
             }
         ),
-        supports_response=SupportsResponse.OPTIONAL,
     )
     return True
 
