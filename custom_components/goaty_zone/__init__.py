@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import inspect
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -623,6 +624,7 @@ async def _store_zones(
         if ZONE_STORE is not None:
             GOATY_SENSOR.update_zone_config(ZONE_STORE.get_all())
     _apply_sensor_state(hass, normalized_zones, new_hash)
+    await _notify_zone_update_callbacks(hass, normalized_zones)
 
     await _notify_zone_update(hass, changed=changed, zones=normalized_zones, new_hash=new_hash)
     return changed, new_hash
@@ -786,6 +788,26 @@ async def _refresh_sensor_from_known_zones(hass: HomeAssistant) -> None:
         if GOATY_SENSOR is not None:
             GOATY_SENSOR.update_zone_config(ZONE_STORE.get_all())
         _apply_sensor_state(hass, zones, _zones_hash(zones))
+        await _notify_zone_update_callbacks(hass, zones)
+
+
+async def _notify_zone_update_callbacks(hass: HomeAssistant, zones: list[dict[str, str]]) -> None:
+    """Notify registered dynamic zone listeners."""
+    domain_data = hass.data.get(DOMAIN)
+    if not isinstance(domain_data, dict):
+        return
+
+    for entry_data in domain_data.values():
+        if not isinstance(entry_data, dict):
+            continue
+        callbacks = entry_data.get("zone_update_callbacks") or []
+        for callback in list(callbacks):
+            try:
+                result = callback(zones)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                _LOGGER.debug("Goaty zone update callback failed", exc_info=True)
 
 
 async def _refresh_coordinators(hass: HomeAssistant) -> None:
@@ -1036,6 +1058,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "config": dict(entry.data),
         "coordinator": coordinator,
         "store": ZONE_STORE,
+        "zone_update_callbacks": [],
     }
     await hass.config_entries.async_forward_entry_setups(
         entry,

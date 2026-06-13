@@ -20,14 +20,32 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up one lock switch per zone."""
-    domain_data = hass.data.get(DOMAIN, {})
+    domain_data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
     runtime_data = entry.runtime_data or {}
     coordinator: GoatyCoordinator = (
-        domain_data.get(entry.entry_id, {}).get("coordinator")
+        domain_data.get("coordinator")
         or runtime_data["coordinator"]
     )
-    zones = coordinator.data.get("zones", []) if coordinator.data else []
-    async_add_entities([GoatyZoneLockSwitch(coordinator, zone) for zone in zones if zone.get("id")])
+    store = domain_data.get("store") or runtime_data["zone_store"]
+    entities: list[GoatyZoneLockSwitch] = [
+        GoatyZoneLockSwitch(coordinator, store, zone)
+        for zone in (store.get_all().values() if store is not None else [])
+        if zone.get("id")
+    ]
+    async_add_entities(entities)
+
+    async def _handle_zone_update(zones: list[dict[str, Any]]) -> None:
+        existing_ids = {entity.zone_id for entity in entities}
+        new_entities = [
+            GoatyZoneLockSwitch(coordinator, store, zone)
+            for zone in zones
+            if zone.get("id") and str(zone.get("id")) not in existing_ids
+        ]
+        if new_entities:
+            async_add_entities(new_entities)
+            entities.extend(new_entities)
+
+    domain_data.setdefault("zone_update_callbacks", []).append(_handle_zone_update)
 
 
 class GoatyZoneLockSwitch(CoordinatorEntity[GoatyCoordinator], SwitchEntity):
@@ -36,34 +54,33 @@ class GoatyZoneLockSwitch(CoordinatorEntity[GoatyCoordinator], SwitchEntity):
     _attr_has_entity_name = True
     _attr_icon = "mdi:lock"
 
-    def __init__(self, coordinator: GoatyCoordinator, zone: dict[str, Any]) -> None:
+    def __init__(self, coordinator: GoatyCoordinator, store: Any, zone: dict[str, Any]) -> None:
         super().__init__(coordinator)
+        self._store = store
         self._zone_id = str(zone.get("id") or "").strip()
         self._zone_name = str(zone.get("name") or self._zone_id).strip()
         self._attr_name = f"{self._zone_name} Sperre"
         self._attr_unique_id = f"{DOMAIN}_zone_{self._zone_id}_lock"
 
     @property
+    def zone_id(self) -> str:
+        return self._zone_id
+
+    @property
     def is_on(self) -> bool:
-        zones = self.coordinator.data.get("zones", []) if self.coordinator.data else []
-        for zone in zones:
-            if str(zone.get("id")) == self._zone_id:
-                return bool(zone.get("locked"))
-        return False
+        zone = self._store.get(self._zone_id) if self._store is not None else {}
+        return bool(zone.get("locked"))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        zones = self.coordinator.data.get("zones", []) if self.coordinator.data else []
-        for zone in zones:
-            if str(zone.get("id")) == self._zone_id:
-                return {
-                    "zone_id": self._zone_id,
-                    "zone_name": zone.get("name"),
-                    "locked_until": zone.get("locked_until"),
-                    "last_mowed": zone.get("last_mowed"),
-                    "due": zone.get("is_due"),
-                }
-        return {"zone_id": self._zone_id, "zone_name": self._zone_name}
+        zone = self._store.get(self._zone_id) if self._store is not None else {}
+        return {
+            "zone_id": self._zone_id,
+            "zone_name": zone.get("name", self._zone_name),
+            "locked_until": zone.get("locked_until"),
+            "last_mowed": zone.get("last_mowed"),
+            "due": zone.get("is_due"),
+        }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self.hass.services.async_call(
