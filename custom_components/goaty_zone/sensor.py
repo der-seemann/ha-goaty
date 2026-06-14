@@ -25,17 +25,23 @@ async def async_setup_entry(
         domain_data.get(entry.entry_id, {}).get("coordinator")
         or runtime_data["coordinator"]
     )
-    position_data = domain_data.setdefault(entry.entry_id, {}).get("position", {})
+    entry_data = domain_data.setdefault(entry.entry_id, {})
+    position_data = entry_data.get("position", {})
+
+    pos_x = GoatyPositionSensor(entry_data, entry.entry_id, "x", "Position X", "cm", position_data)
+    pos_y = GoatyPositionSensor(entry_data, entry.entry_id, "y", "Position Y", "cm", position_data)
+    pos_heading = GoatyPositionSensor(entry_data, entry.entry_id, "heading", "Position Heading", "°", position_data)
 
     entities: list[GoatyCoordinatorSensor] = [
         GoatyMowingWindowSensor(coordinator),
         GoatyDueZonesSensor(coordinator),
         GoatyLockedZonesSensor(coordinator),
         GoatyMowerStateSensor(coordinator),
-        GoatyPositionSensor(domain_data.setdefault(entry.entry_id, {}), entry.entry_id, "x", "Position X", "cm", position_data),
-        GoatyPositionSensor(domain_data.setdefault(entry.entry_id, {}), entry.entry_id, "y", "Position Y", "cm", position_data),
-        GoatyPositionSensor(domain_data.setdefault(entry.entry_id, {}), entry.entry_id, "heading", "Position Heading", "°", position_data),
+        pos_x,
+        pos_y,
+        pos_heading,
     ]
+    entry_data["position_sensors"] = {"x": pos_x, "y": pos_y, "heading": pos_heading}
     async_add_entities(entities)
 
 

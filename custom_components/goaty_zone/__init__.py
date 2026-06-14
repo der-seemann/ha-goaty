@@ -130,6 +130,147 @@ def _extract_clean_info_zone(payload: Any) -> tuple[str, str | None] | None:
     return None
 
 
+def _extract_goat_position_payload(payload: Any) -> dict[str, Any] | None:
+    """Extract the innermost dict that carries robotPos/chargerPos values."""
+
+    if isinstance(payload, (bytes, bytearray)):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return None
+    elif isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    if any(key in payload for key in ("robotPos", "chargerPos", "robotState", "battery")):
+        return payload
+
+    for key in ("body", "data", "report", "payload", "message"):
+        nested = payload.get(key)
+        zone_payload = _extract_goat_position_payload(nested)
+        if zone_payload is not None:
+            return zone_payload
+
+    for nested in payload.values():
+        zone_payload = _extract_goat_position_payload(nested)
+        if zone_payload is not None:
+            return zone_payload
+
+    return None
+
+
+def _parse_goat_position_payload(payload: Any, *, source: str | None = None) -> dict[str, Any] | None:
+    """Parse a GOAT position payload into the stored sensor format."""
+
+    parsed = _extract_goat_position_payload(payload)
+    if parsed is None:
+        return None
+
+    robot_pos = _first_text(parsed.get("robotPos"), parsed.get("robot_pos"))
+    charger_pos = _first_text(parsed.get("chargerPos"), parsed.get("charger_pos"))
+
+    def _parse_triplet(value: str) -> tuple[float | None, float | None, float | None]:
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        if len(parts) < 2:
+            return None, None, None
+        try:
+            x = float(parts[0])
+            y = float(parts[1])
+            heading = float(parts[2]) if len(parts) > 2 else None
+            return x, y, heading
+        except ValueError:
+            return None, None, None
+
+    robot_x, robot_y, robot_heading = _parse_triplet(robot_pos or "")
+    charger_x, charger_y, _ = _parse_triplet(charger_pos or "")
+
+    if robot_x is None or robot_y is None:
+        return None
+
+    body = parsed.get("body") if isinstance(parsed.get("body"), dict) else {}
+    return {
+        "robot_x": robot_x,
+        "robot_y": robot_y,
+        "robot_heading": robot_heading,
+        "robot_battery": body.get("battery") if isinstance(body, dict) else None,
+        "robot_state": body.get("robotState") if isinstance(body, dict) else parsed.get("robotState"),
+        "charger_x": charger_x,
+        "charger_y": charger_y,
+        "source": source or parsed.get("message_name"),
+        "updated_at": parsed.get("updated_at"),
+    }
+
+
+def _write_goat_position_dump(position: dict[str, Any]) -> None:
+    POSITION_DUMP_PATH.write_text(json.dumps(position, ensure_ascii=False, separators=(",", ":")))
+
+
+async def _apply_goat_position_update(hass: HomeAssistant, position: dict[str, Any]) -> None:
+    domain_data = hass.data.get(DOMAIN, {})
+    if not isinstance(domain_data, dict):
+        return
+
+    for entry_id, entry_data in domain_data.items():
+        if not isinstance(entry_data, dict):
+            continue
+        entry_data["position"] = dict(position)
+        sensors = entry_data.get("position_sensors")
+        if not isinstance(sensors, dict):
+            continue
+        for sensor in sensors.values():
+            if hasattr(sensor, "set_position_data"):
+                sensor.set_position_data(position)
+
+    await hass.async_add_executor_job(_write_goat_position_dump, position)
+
+
+async def _handle_goat_position_update(
+    hass: HomeAssistant,
+    topic_name: str,
+    payload: Any,
+) -> bool:
+    position = _parse_goat_position_payload(payload, source=topic_name)
+    if position is None:
+        return False
+
+    await _apply_goat_position_update(hass, position)
+    _LOGGER.info(
+        "GOAT position updated from %s: x=%s y=%s heading=%s",
+        topic_name,
+        position.get("robot_x"),
+        position.get("robot_y"),
+        position.get("robot_heading"),
+    )
+    return True
+
+
+def _maybe_schedule_position_update(
+    topic_split: list[str],
+    payload: bytes,
+) -> None:
+    if GOATY_HASS is None or len(topic_split) < 4:
+        return
+    if not str(topic_split[2]).startswith("onFwBuryPoint"):
+        return
+
+    did = str(topic_split[3]).strip()
+    if _GOATY_TARGET_DIDS and did not in _GOATY_TARGET_DIDS:
+        return
+
+    GOATY_HASS.async_create_task(
+        _handle_goat_position_update(
+            GOATY_HASS,
+            str(topic_split[2]),
+            payload,
+        )
+    )
+
+
 def _current_known_zone_entries() -> list[dict[str, str]]:
     if ZONE_STORE is None:
         return []
@@ -230,8 +371,9 @@ def _install_clean_info_hook(hass: HomeAssistant, entry: ConfigEntry) -> None:
     def _wrapped_handle_atr(self: Any, topic_split: list[str], payload: bytes) -> None:
         try:
             _maybe_schedule_clean_info_learning(topic_split, payload)
+            _maybe_schedule_position_update(topic_split, payload)
         except Exception:
-            _LOGGER.exception("GOAT clean-info hook failed")
+            _LOGGER.exception("GOAT ATR hook failed")
         assert _ORIGINAL_MQTT_HANDLE_ATR is not None
         _ORIGINAL_MQTT_HANDLE_ATR(self, topic_split, payload)
 
@@ -884,36 +1026,16 @@ def _load_last_goat_position() -> dict[str, Any]:
         _LOGGER.exception("Failed to read Goaty position dump")
         return {}
 
-    body = payload.get("body") if isinstance(payload, dict) else {}
-    robot_pos = str(payload.get("robotPos") or body.get("robotPos") or "").strip()
-    charger_pos = str(payload.get("chargerPos") or body.get("chargerPos") or "").strip()
+    parsed = _parse_goat_position_payload(payload)
+    if parsed is not None:
+        return parsed
 
-    def _parse_triplet(value: str) -> tuple[float | None, float | None, float | None]:
-        parts = [part.strip() for part in value.split(",") if part.strip()]
-        if len(parts) < 2:
-            return None, None, None
-        try:
-            x = float(parts[0])
-            y = float(parts[1])
-            heading = float(parts[2]) if len(parts) > 2 else None
-            return x, y, heading
-        except ValueError:
-            return None, None, None
+    if isinstance(payload, dict) and any(
+        key in payload for key in ("robot_x", "robot_y", "robot_heading")
+    ):
+        return payload
 
-    robot_x, robot_y, robot_heading = _parse_triplet(robot_pos)
-    charger_x, charger_y, _ = _parse_triplet(charger_pos)
-
-    return {
-        "robot_x": robot_x,
-        "robot_y": robot_y,
-        "robot_heading": robot_heading,
-        "robot_battery": body.get("battery") if isinstance(body, dict) else None,
-        "robot_state": body.get("robotState") if isinstance(body, dict) else None,
-        "charger_x": charger_x,
-        "charger_y": charger_y,
-        "source": payload.get("message_name") if isinstance(payload, dict) else None,
-        "updated_at": payload.get("updated_at") if isinstance(payload, dict) else None,
-    }
+    return {}
 
 
 async def _restore_last_goat_position(hass: HomeAssistant) -> dict[str, Any]:
